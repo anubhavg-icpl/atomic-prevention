@@ -1,0 +1,169 @@
+/*
+ * Design tokens. Values from the Invinsense Module UI Guide v2.0 §05 (see
+ * application-whitelisting/UecWeb/DESIGN.md). One token set, two values (Law 6):
+ * components never write `dark:` on a colour, they read these names.
+ * Neutral/accent tokens are OKLCH channels; status tokens stay HSL by design.
+ * The `*-text` status tokens are the AA-measured foreground tone of each status;
+ * the bare tone is for dots and fills only.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0.97 0.004 255;
+    --foreground: 0.145 0 0;
+    --card: 1 0 0;
+    --popover: 1 0 0;
+    --primary: 0.55 0.22 18; /* crimson red-team accent, identical in both themes */
+    --primary-foreground: 0.985 0 0;
+    --primary-accent: 0.55 0.22 18;
+    --muted: 0.952 0.005 255;
+    --muted-foreground: 0.5 0 0;
+    --destructive: 0.577 0.245 27.325;
+    --border: 0.905 0.007 255;
+    --input: 0.905 0.007 255;
+    --ring: 0.708 0 0;
+    --sidebar: 0.97 0.004 255;
+
+    --status-ok: 160 84% 39%;
+    --status-degraded: 43 96% 56%;
+    --status-error: 0 84% 60%;
+    --status-idle: 215 20% 65%;
+    --status-ok-text: 163 94% 24%;
+    --status-degraded-text: 26 90% 37%;
+    --status-error-text: 0 72% 51%;
+    --status-idle-text: 215 16% 47%;
+
+    --shadow: 0 1px 2px oklch(0 0 0 / 6%);
+    color-scheme: light;
+  }
+
+  .dark {
+    --background: 0.145 0 0;
+    --foreground: 0.985 0 0;
+    --card: 0.205 0 0;
+    --popover: 0.205 0 0;
+    --primary-accent: 0.72 0.17 18; /* accent as text, lifted to clear AA on the dark card */
+    --muted: 0.269 0 0;
+    --muted-foreground: 0.708 0 0;
+    --destructive: 0.637 0.237 25.331;
+    --border: 1 0 0 / 10%;
+    --input: 1 0 0 / 15%;
+    --ring: 0.556 0 0;
+    --sidebar: 0.145 0 0;
+
+    --status-ok-text: 158 64% 52%;
+    --status-degraded-text: 46 97% 65%;
+    --status-error-text: 0 91% 71%;
+    --status-idle-text: 215 20% 65%;
+
+    --shadow: 0 1px 2px oklch(0 0 0 / 40%);
+    color-scheme: dark;
+  }
+
+  html {
+    font-size: 16px;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans text-sm antialiased;
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background: oklch(var(--primary) / 20%);
+  }
+
+  /* One visible 3px ring for every focusable thing; inset variants opt in. */
+  :focus-visible {
+    outline: 3px solid oklch(var(--ring) / 60%);
+    outline-offset: 2px;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(var(--muted-foreground) / 30%) transparent;
+  }
+}
+
+@layer components {
+  /* Raised surface: shadow plus a hairline, never a heavier border (§07). */
+  .surface {
+    @apply rounded-lg border border-border bg-card;
+    box-shadow: var(--shadow);
+  }
+
+  .field {
+    @apply h-9 w-full rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground;
+    transition: border-color 150ms ease-out;
+  }
+
+  .field:focus-visible {
+    @apply border-primary;
+    outline-offset: 0;
+  }
+
+  .code-block {
+    @apply overflow-x-auto rounded-md border border-border bg-muted p-3 font-mono text-data text-foreground;
+  }
+
+  .skeleton {
+    @apply rounded-md bg-muted;
+    animation: shimmer 1600ms ease-in-out infinite;
+  }
+}
+
+@keyframes shimmer {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes pulse-dot {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+dialog[open] {
+  animation: enter 200ms ease-out;
+}
+
+dialog::backdrop {
+  background: oklch(0 0 0 / 45%);
+}
+
+@media (pointer: coarse) {
+  button,
+  a[role="button"],
+  .field {
+    min-height: 44px;
+  }
+}
+
+/* Reduced motion stays last in the stylesheet (§18). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
