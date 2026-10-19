@@ -183,14 +183,13 @@ export async function fetchAllTechniques(
   params: Omit<TechniqueParams, "skip" | "limit"> = {}
 ): Promise<Technique[]> {
   const limit = 200;
-  const techniques: Technique[] = [];
-
-  for (let skip = 0; ; skip += limit) {
-    const page = await fetchTechniques({ ...params, skip, limit });
-    techniques.push(...page.techniques);
-    if (page.techniques.length === 0 || techniques.length >= page.total) break;
-  }
-
+  const first = await fetchTechniques({ ...params, skip: 0, limit });
+  const techniques = [...first.techniques];
+  // Remaining pages are independent once the total is known; fetch them in parallel.
+  const skips: number[] = [];
+  for (let skip = limit; skip < first.total; skip += limit) skips.push(skip);
+  const rest = await Promise.all(skips.map((skip) => fetchTechniques({ ...params, skip, limit })));
+  for (const page of rest) techniques.push(...page.techniques);
   return techniques;
 }
 
