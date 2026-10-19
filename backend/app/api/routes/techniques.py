@@ -74,22 +74,27 @@ async def list_techniques(
     # Paginate the filtered list
     techniques = all_techniques[skip : skip + limit]
 
-    # Enrich each technique with test count (filtered by platform if specified)
+    # One query for all test counts (technique_id + platforms only, no commands), instead of
+    # two queries per technique: the list endpoint is called with 200-row pages by the UI.
+    plat = platform.lower() if platform else None
+    own: dict[str, int] = {}
+    sub: dict[str, int] = {}
+    rows = await db.execute(select(PreventionTest.technique_id, PreventionTest.platforms))
+    for tid, plats in rows.all():
+        if plat and plat not in [p.lower() for p in (plats or [])]:
+            continue
+        own[tid] = own.get(tid, 0) + 1
+        if "." in tid:
+            parent = tid.split(".", 1)[0]
+            sub[parent] = sub.get(parent, 0) + 1
+
     enriched = []
     for t in techniques:
         data = _serialize_technique(t)
-        test_count = await _count_tests_for_technique(db, t.id, platform)
-
+        test_count = own.get(t.id, 0)
         if "." not in t.id:
             # Parent technique: also count sub-technique tests
-            sub_query = select(PreventionTest).where(
-                PreventionTest.technique_id.like(f"{t.id}.%")
-            )
-            sub_result = await db.execute(sub_query)
-            sub_tests = sub_result.scalars().all()
-            if platform:
-                sub_tests = [st for st in sub_tests if platform.lower() in [p.lower() for p in (st.platforms or [])]]
-            sub_count = len(sub_tests)
+            sub_count = sub.get(t.id, 0)
             data["test_count"] = test_count + sub_count
             data["own_test_count"] = test_count
             data["sub_test_count"] = sub_count
