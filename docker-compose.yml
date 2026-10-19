@@ -1,0 +1,20 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: atomic-prevention
+    ports:
+      - "${MA_HOST:-127.0.0.1}:${MA_PORT:-3000}:8000"
+    volumes:
+      - atomic-prevention-data:/app/data
+    environment:
+      MA_DATABASE_URL: sqlite+aiosqlite:///./data/atomic_prevention.db
+      MA_DATA_DIR: /app/data
+      MA_MITRE_CACHE_DIR: /app/data/mitre_cache
+      MA_DEBUG: ${MA_DEBUG:-false}
+      MA_CORS_ORIGINS: '${MA_CORS_ORIGINS:-["http://localhost:3000"]}'
+    restart: unless-stopped
+
+volumes:
+  atomic-prevention-data:
