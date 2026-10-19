@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Atomic Prevention Source Plugin Schema",
+  "description": "Schema for defining new LOL data source plugins. Create a YAML file conforming to this schema and implement a corresponding BaseIngestor subclass to add a new data source.",
+  "type": "object",
+  "required": ["source_id", "display_name", "description", "repo_url", "platform"],
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "description": "Unique identifier for this source (e.g., 'lolbas', 'gtfobins')",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "display_name": {
+      "type": "string",
+      "description": "Human-readable display name (e.g., 'LOLBAS', 'GTFOBins')"
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of what this data source covers"
+    },
+    "repo_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "GitHub repository URL for the data source"
+    },
+    "data_path": {
+      "type": "string",
+      "description": "Glob pattern for data files within the repo (e.g., 'yml/OSBinaries/**/*.yml')"
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["windows", "linux", "macos", "multi"],
+      "description": "Primary platform this source targets"
+    },
+    "field_mapping": {
+      "type": "object",
+      "description": "JSONPath mappings from source fields to unified schema",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "JSONPath to the entry name field"
+        },
+        "description": {
+          "type": "string",
+          "description": "JSONPath to the description field"
+        },
+        "commands": {
+          "type": "string",
+          "description": "JSONPath to the commands/tests array"
+        },
+        "mitre_techniques": {
+          "type": "string",
+          "description": "JSONPath to MITRE technique ID references"
+        }
+      }
+    },
+    "default_technique_id": {
+      "type": "string",
+      "description": "Default MITRE technique ID if entries don't have explicit mappings",
+      "pattern": "^T\\d{4}(\\.\\d{3})?$"
+    },
+    "default_risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "default": "medium"
+    }
+  },
+  "examples": [
+    {
+      "source_id": "lolbas",
+      "display_name": "LOLBAS",
+      "description": "Living Off The Land Binaries, Scripts, and Libraries",
+      "repo_url": "https://github.com/LOLBAS-Project/LOLBAS",
+      "data_path": "yml/OSBinaries/**/*.yml",
+      "platform": "windows",
+      "field_mapping": {
+        "name": "$.Name",
+        "description": "$.Description",
+        "commands": "$.Commands[*]",
+        "mitre_techniques": "$.Commands[*].MitreID"
+      }
+    },
+    {
+      "source_id": "gtfobins",
+      "display_name": "GTFOBins",
+      "description": "Unix binaries that can be used to bypass local security restrictions",
+      "repo_url": "https://github.com/GTFOBins/GTFOBins.github.io",
+      "data_path": "_gtfobins/*.md",
+      "platform": "linux",
+      "default_technique_id": "T1059.004",
+      "default_risk_level": "high"
+    },
+    {
+      "source_id": "loobins",
+      "display_name": "LOOBins",
+      "description": "Living Off the Orchard: macOS Binaries that can be abused by adversaries",
+      "repo_url": "https://github.com/infosecB/LOOBins",
+      "data_path": "LOOBins/**/*.yml",
+      "platform": "macos",
+      "field_mapping": {
+        "name": "$.name",
+        "description": "$.short_description",
+        "commands": "$.example_use_cases[*].code",
+        "mitre_techniques": "$.example_use_cases[*].tactics"
+      },
+      "default_technique_id": "T1059.004",
+      "default_risk_level": "medium"
+    }
+  ]
+}
