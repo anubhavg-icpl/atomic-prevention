@@ -237,6 +237,42 @@ The web console is served by the backend at `http://localhost:3000` (a static Ne
 
 Design follows the Invinsense module UI guide: Geist type, tokenised colours with one red-team accent, Phosphor Bold icons, status always shown as a dot plus a word, and full light and dark themes. Colours live as tokens in `frontend/src/app/globals.css`; components never hard-code a colour.
 
+### Screenshots
+
+Captured from a running instance with sample data (a Volt Typhoon playbook and one simulated run).
+
+**Dashboard.** Totals, prevention score and the ATT&CK coverage matrix. Green cells are blocked, red are allowed, grey are untested.
+
+![Dashboard in light theme](docs/screenshots/dashboard-light.png)
+
+![Dashboard in dark theme](docs/screenshots/dashboard-dark.png)
+
+**Techniques.** Search, filter and expand a technique to read its tests and commands.
+
+![Techniques](docs/screenshots/techniques.png)
+
+**Adversaries and playbook generation.** Pick a group, review its techniques, and generate a playbook.
+
+![Adversaries](docs/screenshots/adversaries.png)
+
+![Playbook builder](docs/screenshots/playbook-builder.png)
+
+**Playbooks.** Export JSON and copy the commands that run it on a target.
+
+![Playbooks](docs/screenshots/playbooks.png)
+
+**Results.** Runs per playbook, then per-test verdicts for a single run.
+
+![Results](docs/screenshots/results.png)
+
+![Run detail](docs/screenshots/run-detail.png)
+
+**API docs and landing page.**
+
+![API docs](docs/screenshots/api-docs.png)
+
+![Landing page](docs/screenshots/landing.png)
+
 ### Frontend development
 
 ```bash
