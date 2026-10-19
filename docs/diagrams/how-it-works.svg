@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" aria-labelledby="t d" font-family="Geist, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <title id="t">How Atomic Prevention works</title>
+  <desc id="d">LOL data sources and adversary intelligence feed a MITRE ATT&amp;CK technique map. The map feeds a playbook engine. The playbook runs on a target through an agent, and results report blocked or allowed with a prevention percentage.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="#6e6e6e"/>
+    </marker>
+  </defs>
+  <style>
+    .panel { fill: #ffffff; stroke: #e3e5e8; stroke-width: 1.5; }
+    .head { font-size: 15px; font-weight: 600; fill: #0a0a0a; }
+    .line { font-size: 13px; fill: #6e6e6e; }
+    .mono { font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 12.5px; fill: #0a0a0a; }
+    .flow { stroke: #6e6e6e; stroke-width: 1.8; fill: none; }
+    .tag { font-size: 12px; font-weight: 600; fill: #6e6e6e; }
+  </style>
+  <rect width="960" height="540" rx="14" fill="#f6f7f9"/>
+
+  <!-- Row 1 -->
+  <rect class="panel" x="40" y="40" width="230" height="170" rx="10"/>
+  <text class="head" x="60" y="72">LOL sources</text>
+  <text class="mono" x="60" y="100">LOLBAS</text>
+  <text class="mono" x="60" y="122">LOLDrivers</text>
+  <text class="mono" x="60" y="144">LOLRMM</text>
+  <text class="mono" x="60" y="166">Atomic Red Team</text>
+  <text class="mono" x="60" y="188">Custom</text>
+
+  <rect class="panel" x="365" y="40" width="230" height="170" rx="10"/>
+  <text class="head" x="385" y="72">MITRE ATT&amp;CK</text>
+  <text class="line" x="385" y="100">Technique map</text>
+  <text class="line" x="385" y="122">700+ techniques</text>
+  <text class="line" x="385" y="144">Tactics and platforms</text>
+
+  <rect class="panel" x="690" y="40" width="230" height="170" rx="10"/>
+  <text class="head" x="710" y="72">Adversary intel</text>
+  <text class="line" x="710" y="100">170+ groups</text>
+  <text class="line" x="710" y="122">Volt Typhoon, APT29,</text>
+  <text class="line" x="710" y="144">FIN7 and more</text>
+
+  <path class="flow" d="M270 125H363" marker-end="url(#arrow)"/>
+  <path class="flow" d="M690 125H597" marker-end="url(#arrow)"/>
+
+  <!-- Engine -->
+  <path class="flow" d="M480 210V262" marker-end="url(#arrow)"/>
+  <rect class="panel" x="365" y="264" width="230" height="100" rx="10"/>
+  <text class="head" x="385" y="296">Playbook engine</text>
+  <text class="line" x="385" y="320">Group, then techniques,</text>
+  <text class="line" x="385" y="340">then prevention tests</text>
+
+  <!-- Row 3 -->
+  <path class="flow" d="M480 364V412"/>
+  <path class="flow" d="M480 412H155V424" marker-end="url(#arrow)"/>
+  <rect class="panel" x="40" y="426" width="230" height="74" rx="10" stroke-dasharray="0"/>
+  <text class="head" x="60" y="458">Execution agent</text>
+  <text class="line" x="60" y="480">PowerShell or Python</text>
+
+  <path class="flow" d="M270 463H363" marker-end="url(#arrow)"/>
+  <text class="tag" x="283" y="455">runs on</text>
+
+  <rect class="panel" x="365" y="426" width="230" height="74" rx="10"/>
+  <text class="head" x="385" y="458">Target system</text>
+  <text class="line" x="385" y="480">Your authorised lab host</text>
+
+  <path class="flow" d="M595 463H688" marker-end="url(#arrow)"/>
+  
+  <text class="tag" x="608" y="455">reports</text>
+
+  <rect class="panel" x="690" y="414" width="230" height="108" rx="10"/>
+  <text class="head" x="710" y="442">Results</text>
+  <circle cx="717" cy="460" r="5" fill="#10b981"/>
+  <text class="mono" x="730" y="464">Blocked</text>
+  <circle cx="717" cy="480" r="5" fill="#ef4444"/>
+  <text class="mono" x="730" y="484">Allowed</text>
+  <text class="line" x="710" y="506">Plus a prevention score</text>
+</svg>

@@ -10,28 +10,7 @@ It aggregates multiple LOL projects ([LOLBAS](https://lolbas-project.github.io/)
 
 ## How It Works
 
-```
-┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│  LOL Sources │     │   MITRE ATT&CK   │     │  Adversary Intel │
-│  LOLBAS      │────▶│   Technique Map   │◀────│  170+ Groups     │
-│  LOLDrivers  │     │   700+ Techniques │     │  Volt Typhoon,   │
-│  LOLRMM      │     └────────┬─────────┘     │  APT29, FIN7...  │
-│  Atomic RT   │              │               └──────────────────┘
-│  Custom      │              ▼
-└──────────────┘     ┌──────────────────┐
-                     │ Playbook Engine  │
-                     │ Group → Techs →  │
-                     │ Prevention Tests │
-                     └────────┬─────────┘
-                              │
-                              ▼
-                     ┌──────────────────┐     ┌──────────────────┐
-                     │  PowerShell      │────▶│  Results:        │
-                     │  Execution Agent │     │  BLOCKED ✓       │
-                     │  Run tests on    │     │  ALLOWED ✗       │
-                     │  target system   │     │  Prevention %    │
-                     └──────────────────┘     └──────────────────┘
-```
+![How Atomic Prevention works: LOL sources and adversary intel feed the ATT&CK technique map, which feeds the playbook engine; an agent runs the playbook on a target and reports blocked or allowed with a prevention score](docs/diagrams/how-it-works.svg)
 
 1. **Ingest** data from LOLBAS, LOLDrivers, LOLRMM, and Atomic Red Team
 2. **Map** everything to MITRE ATT&CK techniques and 170+ adversary groups
