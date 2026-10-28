@@ -84,7 +84,7 @@ function Invoke-AtomicPrevention {
     ============================================================
       Atomic Prevention  Prevention Validation Agent  v$Script:ModuleVersion
     ============================================================
-      AUTHORIZED SECURITY TESTING ONLY
+      Authorized security testing only
       Ensure you have explicit permission before proceeding.
     ============================================================
 
@@ -124,7 +124,7 @@ function Invoke-AtomicPrevention {
     Write-Host "  [*] Timeout   : ${timeoutSeconds}s per test" -ForegroundColor White
 
     if ($WhatIfPreference) {
-        Write-Host '  [*] Mode      : DRY RUN (no commands will be executed)' -ForegroundColor Yellow
+        Write-Host '  [*] Mode      : Dry run (no commands will be executed)' -ForegroundColor Yellow
     }
 
     Write-Host ''
@@ -328,8 +328,9 @@ function Invoke-AtomicPrevention {
     # ------------------------------------------------------------------
     # Execute tests
     # ------------------------------------------------------------------
+    $runStartedAt = (Get-Date).ToUniversalTime().ToString('o')
     $allResults = [System.Collections.Generic.List[hashtable]]::new()
-    $summary = @{ blocked = 0; allowed = 0; error = 0; skipped = 0 }
+    $summary = @{ blocked = 0; detected = 0; allowed = 0; error = 0; skipped = 0 }
     $testIndex = 0
 
     foreach ($test in $tests) {
@@ -348,6 +349,24 @@ function Invoke-AtomicPrevention {
         }
         if ($platforms.Count -gt 0 -and 'windows' -notin $platforms) {
             Write-Host "$prefix SKIP  $($test.technique_id) | $($test.name) (not a Windows test)" -ForegroundColor DarkGray
+            $skipStartedAt = (Get-Date).ToUniversalTime().ToString('o')
+            $allResults.Add(@{
+                TestId = $test.id
+                TestName = $test.name
+                TechniqueId = $test.technique_id
+                Verdict = 'skipped'
+                StartedAt = $skipStartedAt
+                started_at = $skipStartedAt
+                executed_at = $skipStartedAt
+                CompletedAt = $skipStartedAt
+                completed_at = $skipStartedAt
+                ExitCode = $null
+                ErrorMessage = 'Test not applicable to platform: windows'
+                ExecutionTimeMs = 0
+                StdOut = ''
+                StdErr = ''
+                AgentLogs = @()
+            })
             $summary.skipped++
             continue
         }
@@ -365,14 +384,23 @@ function Invoke-AtomicPrevention {
 
         if ($test.elevation_required -eq $true -and -not $isAdmin) {
             Write-Host "$prefix SKIP  $($test.technique_id) | $($test.name) (requires elevation)" -ForegroundColor DarkGray
+            $skipStartedAt = (Get-Date).ToUniversalTime().ToString('o')
             $skipResult = @{
                 TestId          = $test.id
                 TestName        = $test.name
                 TechniqueId     = $test.technique_id
                 Verdict         = 'skipped'
+                StartedAt       = $skipStartedAt
+                started_at      = $skipStartedAt
+                executed_at     = $skipStartedAt
+                CompletedAt     = $skipStartedAt
+                completed_at    = $skipStartedAt
                 ExitCode        = $null
                 ErrorMessage    = 'Test requires elevation but agent is not running as administrator'
                 ExecutionTimeMs = 0
+                StdOut          = ''
+                StdErr          = ''
+                AgentLogs       = @()
             }
             $allResults.Add($skipResult)
             $summary.skipped++
@@ -388,7 +416,7 @@ function Invoke-AtomicPrevention {
         }
 
         # Display the test being run
-        Write-Host "$prefix TEST  $($test.technique_id) | $($test.name)" -ForegroundColor White -NoNewline
+        Write-Host "$prefix Run   $($test.technique_id) | $($test.name)" -ForegroundColor White -NoNewline
 
         # Execute
         $testResult = Test-Prevention `
@@ -429,6 +457,14 @@ function Invoke-AtomicPrevention {
                     Write-Host "         Reference: $($test.guidance.mitre_reference)" -ForegroundColor DarkCyan
                 }
             }
+            'detected' {
+                Write-Host "`r$prefix " -NoNewline
+                Write-Host 'DETECTED' -ForegroundColor Cyan -NoNewline
+                Write-Host " $($test.technique_id) | $($test.name)" -ForegroundColor White
+                if ($testResult.ErrorMessage) {
+                    Write-Host "         $($testResult.ErrorMessage)" -ForegroundColor DarkCyan
+                }
+            }
             'error' {
                 Write-Host "`r$prefix " -NoNewline
                 Write-Host 'ERROR  ' -ForegroundColor Yellow -NoNewline
@@ -453,7 +489,7 @@ function Invoke-AtomicPrevention {
         }
 
         # Write to log file
-        $logVerdict = if ($testResult.Verdict -in @('blocked', 'allowed', 'error')) {
+        $logVerdict = if ($testResult.Verdict -in @('blocked', 'detected', 'allowed', 'error')) {
             $testResult.Verdict
         } else {
             'error'
@@ -467,8 +503,8 @@ function Invoke-AtomicPrevention {
             -ExecutionTimeMs $testResult.ExecutionTimeMs `
             -ExitCode $testResult.ExitCode
 
-        # Run cleanup command if present and test was allowed
-        if ($testResult.Verdict -eq 'allowed' -and $test.cleanup_command -and -not $WhatIfPreference) {
+        # Run cleanup whenever the process may have run, including detection-only outcomes.
+        if ($testResult.Verdict -in @('allowed', 'detected') -and $test.cleanup_command -and -not $WhatIfPreference) {
             try {
                 $cleanup = Invoke-TestProcess `
                     -Command $test.cleanup_command `
@@ -487,13 +523,18 @@ function Invoke-AtomicPrevention {
     # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
+    $runCompletedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $sensorLogs = Get-UecSensorLogs
+    $debugLogs = New-DebugLogs -Results @($allResults) -Tests @($tests)
     Write-Host ''
     Write-Host '  ============================================================' -ForegroundColor Cyan
-    Write-Host '    RESULTS SUMMARY' -ForegroundColor Cyan
+    Write-Host '    Results summary' -ForegroundColor Cyan
     Write-Host '  ============================================================' -ForegroundColor Cyan
     Write-Host "    Total tests : $($tests.Count)" -ForegroundColor White
     Write-Host '    Blocked     : ' -NoNewline -ForegroundColor White
     Write-Host "$($summary.blocked)" -ForegroundColor Green
+    Write-Host '    Detected    : ' -NoNewline -ForegroundColor White
+    Write-Host "$($summary.detected)" -ForegroundColor Cyan
     Write-Host '    Allowed     : ' -NoNewline -ForegroundColor White
     Write-Host "$($summary.allowed)" -ForegroundColor Red
     Write-Host '    Errors      : ' -NoNewline -ForegroundColor White
@@ -503,12 +544,16 @@ function Invoke-AtomicPrevention {
     Write-Host '  ============================================================' -ForegroundColor Cyan
 
     # Prevention score
-    $executed = $summary.blocked + $summary.allowed
+    $executed = $summary.blocked + $summary.detected + $summary.allowed
+    $visible = $summary.blocked + $summary.detected
     if ($executed -gt 0) {
         $score = [math]::Round(($summary.blocked / $executed) * 100, 1)
         $scoreColor = if ($score -ge 80) { 'Green' } elseif ($score -ge 50) { 'Yellow' } else { 'Red' }
         Write-Host "    Prevention  : " -NoNewline -ForegroundColor White
         Write-Host "${score}% ($($summary.blocked)/$executed tests blocked)" -ForegroundColor $scoreColor
+        $visibility = [math]::Round(($visible / $executed) * 100, 1)
+        Write-Host '    Visibility  : ' -NoNewline -ForegroundColor White
+        Write-Host "${visibility}% ($visible/$executed tests blocked or detected)" -ForegroundColor $scoreColor
         Write-Host '  ============================================================' -ForegroundColor Cyan
     }
 
@@ -520,10 +565,10 @@ function Invoke-AtomicPrevention {
     $allowedTests = @($allResults | Where-Object { $_.Verdict -eq 'allowed' })
     if ($allowedTests.Count -gt 0) {
         Write-Host '  ============================================================' -ForegroundColor Red
-        Write-Host '    REMEDIATION NEEDED' -ForegroundColor Red
+    Write-Host '    Remediation needed' -ForegroundColor Red
         Write-Host '  ============================================================' -ForegroundColor Red
         Write-Host ''
-        Write-Host "    The following $($allowedTests.Count) test(s) were NOT blocked:" -ForegroundColor White
+        Write-Host "    The following $($allowedTests.Count) test(s) were not blocked:" -ForegroundColor White
         Write-Host ''
 
         $remediationIndex = 0
@@ -556,16 +601,27 @@ function Invoke-AtomicPrevention {
     # Save results locally
     # ------------------------------------------------------------------
     $hostName = try { [System.Net.Dns]::GetHostName() } catch { $env:COMPUTERNAME }
+    $platform = if ($env:OS -eq 'Windows_NT') { 'windows' } elseif ($IsMacOS) { 'macos' } elseif ($IsLinux) { 'linux' } else { 'unknown' }
+    $osVersion = try { [System.Environment]::OSVersion.VersionString } catch { '' }
     $outputPayload = @{
         atomic_prevention_version = $Script:ModuleVersion
         run_timestamp         = (Get-Date -Format 'o')
+        agent_name            = 'powershell-agent'
+        started_at            = $runStartedAt
+        completed_at          = $runCompletedAt
         hostname              = $hostName
+        platform              = $platform
+        os_version            = $osVersion
+        agent_version         = $Script:ModuleVersion
         playbook              = @{
             id              = $playbookMeta.id
             name            = $playbookMeta.name
             adversary_group = $playbookMeta.adversary_group
         }
         summary               = $summary
+        performance           = @{}
+        sensor_logs           = @($sensorLogs)
+        debug_logs            = @($debugLogs)
         results                = @($allResults)
     }
 
@@ -586,6 +642,13 @@ function Invoke-AtomicPrevention {
             -ServerUrl $ServerUrl `
             -PlaybookId $playbookMeta.id `
             -Results @($allResults) `
+            -StartedAt $runStartedAt `
+            -CompletedAt $runCompletedAt `
+            -Platform $platform `
+            -OsVersion $osVersion `
+            -AgentVersion $Script:ModuleVersion `
+            -SensorLogs @($sensorLogs) `
+            -DebugLogs @($debugLogs) `
             -ResultsEndpoint $resultsEndpoint
 
         if ($uploadResponse.Success) {

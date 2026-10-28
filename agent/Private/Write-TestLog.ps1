@@ -18,7 +18,7 @@ function Write-TestLog {
         MITRE ATT&CK technique ID (e.g. T1059.001).
 
     .PARAMETER Verdict
-        The execution verdict: blocked, allowed, or error.
+        The execution verdict: blocked, detected, allowed, or error.
 
     .PARAMETER Reason
         Human-readable explanation of the verdict.
@@ -41,7 +41,7 @@ function Write-TestLog {
         [string]$TechniqueId = '',
 
         [Parameter(Mandatory)]
-        [ValidateSet('blocked', 'allowed', 'error')]
+        [ValidateSet('blocked', 'detected', 'allowed', 'error')]
         [string]$Verdict,
 
         [Parameter()]

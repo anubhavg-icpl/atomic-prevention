@@ -22,14 +22,18 @@ Requires: Python 3.8+  (stdlib only -- no pip install needed)
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import os
 import platform
 import re
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -153,6 +157,17 @@ _BLOCK_PATTERNS_LINUX: List[str] = [
 _BLOCK_SIGNALS: set = {
     signal.SIGKILL,  # 9  -- TCC / sandbox kill on macOS
 }
+_DETECT_PATTERNS: List[Tuple[str, str]] = [
+    (r"(?<!not )\bdetected\b", "detected"),
+    (r"(?<!no )\bdetection\b", "detection"),
+    (r"(?<!not )\balerted\b", "alerted"),
+    (r"\balert triggered\b", "alert triggered"),
+    (r"(?<!not )\bsuspicious\b", "suspicious"),
+    (r"\bthreat found\b", "threat found"),
+    (r"\bsigma match\b", "sigma match"),
+    (r"\bpolicy audit\b", "policy audit"),
+    (r"\baudit event\b", "audit event"),
+]
 if hasattr(signal, "SIGSYS"):
     _BLOCK_SIGNALS.add(signal.SIGSYS)  # 31 -- seccomp
 
@@ -177,6 +192,17 @@ def _stderr_matches_block(stderr_text: str, plat: str) -> Tuple[bool, Optional[s
     return False, None
 
 
+def _output_matches_detection(text: str) -> Tuple[bool, Optional[str]]:
+    lower = text.lower()
+    for pattern, label in _DETECT_PATTERNS:
+        try:
+            if re.search(pattern, lower):
+                return True, label
+        except re.error:
+            continue
+    return False, None
+
+
 def _get_verdict(
     *,
     process_started: bool,
@@ -190,7 +216,7 @@ def _get_verdict(
     """Determine verdict for a single test execution.
 
     Returns (verdict, reason) where verdict is one of
-    'blocked', 'allowed', 'error'.
+    'blocked', 'detected', 'allowed', or 'error'.
 
     The logic mirrors the PowerShell agent's Get-ExecutionVerdict but adds
     platform-specific checks for macOS (Gatekeeper, TCC, quarantine) and
@@ -214,8 +240,29 @@ def _get_verdict(
         err_lower = reason.lower()
         if any(kw in err_lower for kw in ("permission", "errno 13", "errno 1")):
             return "blocked", f"Security control prevented execution: {reason}"
+        detected, matched = _output_matches_detection(reason)
+        if detected:
+            return "detected", f"Detection indicator observed without a block ({matched}): {reason}"
 
         return "error", f"Process failed to start (non-security): {reason}"
+
+    # Always inspect process output, even when the exit code or timeout state
+    # looks benign. Security tools can report an event without changing the
+    # process exit code. Block evidence remains more specific than a
+    # detection-only indicator.
+    #
+    # First, always check output for block patterns even when exit code
+    # looks "normal".  Some security tools write denial messages to
+    # stderr but still allow the process to exit 0.
+    evidence_text = f"{stderr_text}\n{stdout_text}"
+    if evidence_text.strip():
+        block_found, matched = _stderr_matches_block(evidence_text, plat)
+        if block_found:
+            return "blocked", f"Security control indicator observed ({matched})"
+
+    detected, detected_pattern = _output_matches_detection(evidence_text)
+    if detected:
+        return "detected", f"Detection indicator observed without a block ({detected_pattern})"
 
     # ------------------------------------------------------------------
     # Case 2: Process started but timed out
@@ -225,17 +272,8 @@ def _get_verdict(
         return "allowed", "Process was still running after timeout (not blocked)"
 
     # ------------------------------------------------------------------
-    # Case 3: Process started and exited -- inspect exit code + stderr
+    # Case 3: Process started and exited -- inspect exit code
     # ------------------------------------------------------------------
-
-    # First, always check stderr for block patterns even when exit code
-    # looks "normal".  Some security tools write denial messages to
-    # stderr but still allow the process to exit 0.
-    evidence_text = f"{stderr_text}\n{stdout_text}"
-    if evidence_text.strip():
-        block_found, matched = _stderr_matches_block(evidence_text, plat)
-        if block_found:
-            return "blocked", f"Security control indicator observed ({matched})"
 
     if exit_code is None:
         return "error", "Process started but exit code could not be determined"
@@ -308,6 +346,8 @@ def _execute_command(
         "execution_time_ms": 0,
         "stdout": "",
         "stderr": "",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "agent_logs": [],
     }
     shell_prefix, shell_err = _resolve_shell(executor, plat)
     if shell_err or not shell_prefix:
@@ -387,26 +427,44 @@ def _run_test(
         "test_name": test_name,
         "technique_id": technique_id,
         "verdict": "error",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finish_time": None,
+        "completed_at": None,
+        "process_started": False,
+        "timed_out": False,
         "exit_code": None,
         "error_message": None,
         "execution_time_ms": 0,
         "stdout": "",
         "stderr": "",
+        "agent_logs": [],
     }
 
     if not command or not command.strip():
         result["error_message"] = "Test has no command defined"
-        return result
+        _append_event_log(result, "error", "validate", result["error_message"])
+        return _finalize_result(result)
     if not executor:
         result["error_message"] = "Test has no executor defined"
-        return result
+        _append_event_log(result, "error", "validate", result["error_message"])
+        return _finalize_result(result)
     if test.get("runnable") is False:
         result["error_message"] = "Test is not marked runnable"
-        return result
+        _append_event_log(result, "error", "validate", result["error_message"])
+        return _finalize_result(result)
     if dry_run:
         result["verdict"] = "skipped"
         result["error_message"] = "Dry-run mode: test was not executed"
-        return result
+        _append_event_log(result, "debug", "skip", "Dry-run mode requested")
+        return _finalize_result(result)
+
+    result["agent_logs"].append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": "debug",
+        "phase": "start",
+        "message": f"Prepared {executor} test",
+        "command": _redact_log_text(command),
+    })
 
     for prerequisite in test.get("prerequisites", []):
         prereq_executor = prerequisite.get("executor") or executor
@@ -418,6 +476,7 @@ def _run_test(
             check = _execute_command(
                 check_command, prereq_executor, prerequisite_timeout_seconds, plat
             )
+            _append_result_log(result, "debug", "prerequisite_check", check_command, check)
             if (check["process_started"] and not check["timed_out"]
                     and check["exit_code"] == 0):
                 continue
@@ -429,38 +488,44 @@ def _run_test(
                 f"Prerequisite is unsatisfied and has no setup command: {description}"
             )
             if check:
-                result["stdout"] = check["stdout"]
-                result["stderr"] = check["stderr"]
-            return result
+                result["stdout"] = _redact_log_text(check["stdout"])
+                result["stderr"] = _redact_log_text(check["stderr"])
+                _append_event_log(result, "error", "prerequisite_check", result["error_message"])
+            return _finalize_result(result)
 
         setup = _execute_command(
             get_command, prereq_executor, prerequisite_timeout_seconds, plat
         )
+        _append_result_log(result, "debug", "prerequisite_setup", get_command, setup)
         if (not setup["process_started"] or setup["timed_out"]
                 or setup["exit_code"] != 0):
             result["error_message"] = f"Prerequisite setup failed: {description}"
-            result["stdout"] = setup["stdout"]
-            result["stderr"] = setup["stderr"]
-            return result
+            result["stdout"] = _redact_log_text(setup["stdout"])
+            result["stderr"] = _redact_log_text(setup["stderr"])
+            return _finalize_result(result)
 
         if check_command.strip():
             recheck = _execute_command(
                 check_command, prereq_executor, prerequisite_timeout_seconds, plat
             )
+            _append_result_log(result, "debug", "prerequisite_recheck", check_command, recheck)
             if (not recheck["process_started"] or recheck["timed_out"]
                     or recheck["exit_code"] != 0):
                 result["error_message"] = (
                     f"Prerequisite remains unsatisfied after setup: {description}"
                 )
-                result["stdout"] = recheck["stdout"]
-                result["stderr"] = recheck["stderr"]
-                return result
+                result["stdout"] = _redact_log_text(recheck["stdout"])
+                result["stderr"] = _redact_log_text(recheck["stderr"])
+                return _finalize_result(result)
 
     execution = _execute_command(command, executor, timeout_seconds, plat)
     result["exit_code"] = execution["exit_code"]
+    result["process_started"] = execution["process_started"]
+    result["timed_out"] = execution["timed_out"]
     result["execution_time_ms"] = execution["execution_time_ms"]
-    result["stdout"] = execution["stdout"]
-    result["stderr"] = execution["stderr"]
+    result["stdout"] = _redact_log_text(execution["stdout"])
+    result["stderr"] = _redact_log_text(execution["stderr"])
+    _append_result_log(result, "info", "execute", command, execution)
 
     # Determine verdict
     verdict, reason = _get_verdict(
@@ -475,8 +540,49 @@ def _run_test(
 
     result["verdict"] = verdict
     result["error_message"] = reason
+    result["agent_logs"].append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": "info" if verdict in ("blocked", "detected", "allowed") else "error",
+        "phase": "verdict",
+        "message": _redact_log_text(reason),
+    })
 
+    return _finalize_result(result)
+
+
+def _finalize_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    if not result.get("finish_time"):
+        finished_at = datetime.now(timezone.utc).isoformat()
+        result["finish_time"] = finished_at
+        result["completed_at"] = finished_at
     return result
+
+
+def _append_result_log(
+    result: Dict[str, Any], level: str, phase: str, command: str, execution: Dict[str, Any]
+) -> None:
+    result.setdefault("agent_logs", []).append({
+        "timestamp": execution.get("started_at") or datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "phase": phase,
+        "command": _redact_log_text(command),
+        "exit_code": execution.get("exit_code"),
+        "duration_ms": execution.get("execution_time_ms", 0),
+        "error": _redact_log_text(execution.get("error_message") or ""),
+        "stdout": _redact_log_text((execution.get("stdout") or "")[:2000]),
+        "stderr": _redact_log_text((execution.get("stderr") or "")[:2000]),
+    })
+
+
+def _append_event_log(
+    result: Dict[str, Any], level: str, phase: str, message: str
+) -> None:
+    result.setdefault("agent_logs", []).append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "phase": phase,
+        "message": _redact_log_text(message),
+    })
 
 
 def _run_cleanup(
@@ -503,6 +609,682 @@ def _run_cleanup(
         )
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# UEC benchmark telemetry
+# ---------------------------------------------------------------------------
+_MAX_PERFORMANCE_SAMPLES = 8100
+_PERFORMANCE_INTERVAL_SECONDS = 2.0
+_PERFORMANCE_METRICS = (
+    "load_1m",
+    "host_cpu_busy_pct",
+    "host_cpu_iowait_pct",
+    "memory_used_pct",
+    "memory_available_mb",
+    "sensor_cpu_pct",
+    "sensor_rss_mb",
+    "sensor_threads",
+    "sensor_fds",
+    "sensor_read_kb",
+    "sensor_write_kb",
+    "sensor_db_mb",
+    "sensor_processes",
+)
+_PERFORMANCE_CSV_FIELDS = {
+    "load1": "load_1m",
+    "cpu_busy_pct": "host_cpu_busy_pct",
+    "cpu_iowait_pct": "host_cpu_iowait_pct",
+    "mem_used_pct": "memory_used_pct",
+    "mem_avail_mb": "memory_available_mb",
+    "agent_cpu_pct": "sensor_cpu_pct",
+    "agent_rss_mb": "sensor_rss_mb",
+    "agent_threads": "sensor_threads",
+    "agent_fds": "sensor_fds",
+    "agent_read_kb": "sensor_read_kb",
+    "agent_write_kb": "sensor_write_kb",
+    "agent_db_mb": "sensor_db_mb",
+    "agent_procs": "sensor_processes",
+}
+
+
+def _uec_process_snapshot() -> Tuple[
+    Dict[int, Tuple[int, int, int]], List[Dict[str, Any]]
+]:
+    """Read UEC sensor process facts directly from procfs.
+
+    No subprocess is executed because every process launch can affect an
+    endpoint security agent and distort benchmark telemetry.
+    """
+    metrics: Dict[int, Tuple[int, int, int]] = {}
+    identities: List[Dict[str, Any]] = []
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return metrics, identities
+
+    own_pid = os.getpid()
+    for entry in entries:
+        if not entry.isdigit() or int(entry) == own_pid:
+            continue
+        pid = int(entry)
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as handle:
+                cmdline = handle.read().replace(b"\0", b" ").decode(
+                    "utf-8", errors="replace"
+                ).strip()
+            if not re.search(r"(^|/)uec-sensor(\s|$)", cmdline):
+                continue
+            with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as handle:
+                stat_parts = handle.read().rsplit(")", 1)[1].split()
+            utime = int(stat_parts[11])
+            stime = int(stat_parts[12])
+            rss_kb = 0
+            threads = 0
+            with open(f"/proc/{pid}/status", "r", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("VmRSS:"):
+                        rss_kb = int(line.split()[1])
+                    elif line.startswith("Threads:"):
+                        threads = int(line.split()[1])
+            metrics[pid] = (utime + stime, rss_kb, threads)
+            try:
+                executable = os.readlink(f"/proc/{pid}/exe")
+            except OSError:
+                executable = ""
+            identities.append({
+                "pid": pid,
+                "command_line": _redact_log_text(cmdline),
+                "executable": executable,
+                "start_time_ticks": int(stat_parts[19]),
+            })
+        except (OSError, ValueError, IndexError):
+            continue
+    return metrics, identities
+
+
+def _read_loadavg() -> Optional[float]:
+    try:
+        with open("/proc/loadavg", "r", encoding="utf-8") as handle:
+            return float(handle.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _read_memory() -> Tuple[Optional[float], Optional[int]]:
+    try:
+        values: Dict[str, int] = {}
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith(("MemTotal:", "MemAvailable:")):
+                    key, value = line.split(":", 1)
+                    values[key] = int(value.strip().split()[0])
+        total = values.get("MemTotal", 0)
+        available = values.get("MemAvailable", 0)
+        if total <= 0:
+            return None, None
+        used_pct = round(100.0 * (total - available) / total, 2)
+        return used_pct, available // 1024
+    except (OSError, ValueError, IndexError):
+        return None, None
+
+
+class _UecBenchmarkSampler:
+    """Bounded procfs sampler for the local UEC sensor process."""
+
+    def __init__(self) -> None:
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._samples: List[Dict[str, Any]] = []
+        self._truncated = False
+        self._last_cpu: Dict[int, int] = {}
+        self._last_monotonic = 0.0
+        self._identities: List[Dict[str, Any]] = []
+        self._restarts = 0
+
+    def start(self) -> None:
+        snapshot, identities = _uec_process_snapshot()
+        self._last_cpu = {pid: values[0] for pid, values in snapshot.items()}
+        self._last_monotonic = time.monotonic()
+        self._identities = identities
+        self._thread = threading.Thread(
+            target=self._run, name="uec-benchmark-sampler", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> Dict[str, Any]:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+        with self._lock:
+            samples = list(self._samples)
+            identities = list(self._identities)
+            truncated = self._truncated
+            restarts = self._restarts
+        return _performance_report(
+            samples=samples,
+            source="live-procfs",
+            interval_seconds=_PERFORMANCE_INTERVAL_SECONDS,
+            truncated=truncated,
+            process_identity=identities,
+            available=True,
+            restarts=restarts,
+        )
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(_PERFORMANCE_INTERVAL_SECONDS):
+            sample = self._sample_once()
+            if sample is None:
+                continue
+            with self._lock:
+                if len(self._samples) < _MAX_PERFORMANCE_SAMPLES:
+                    self._samples.append(sample)
+                else:
+                    self._truncated = True
+
+    def _sample_once(self) -> Optional[Dict[str, Any]]:
+        now = time.monotonic()
+        elapsed = now - self._last_monotonic
+        snapshot, identities = _uec_process_snapshot()
+
+        previous = self._last_cpu
+        current = {pid: values[0] for pid, values in snapshot.items()}
+        common = set(previous) & set(current)
+        cpu_percent = None
+        if elapsed > 0 and common:
+            try:
+                clock_ticks = os.sysconf("SC_CLK_TCK")
+                cpu_seconds = sum(current[pid] - previous[pid] for pid in common) / clock_ticks
+                cpu_percent = round(
+                    (cpu_seconds / elapsed) * 100.0 * (os.cpu_count() or 1), 3
+                )
+            except (KeyError, ValueError, ZeroDivisionError, OSError):
+                cpu_percent = None
+
+        if set(snapshot) != set(previous):
+            self._restarts += 1
+            with self._lock:
+                for identity in identities:
+                    if identity not in self._identities:
+                        self._identities.append(identity)
+        rss_kb = sum(values[1] for values in snapshot.values())
+        threads = sum(values[2] for values in snapshot.values())
+        memory_used_pct, memory_available_mb = _read_memory()
+        sample: Dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "sensor_processes": len(snapshot),
+            "sensor_rss_mb": round(rss_kb / 1024.0, 3) if rss_kb else 0,
+            "sensor_threads": threads,
+            "load_1m": _read_loadavg(),
+            "memory_used_pct": memory_used_pct,
+            "memory_available_mb": memory_available_mb,
+        }
+        if cpu_percent is not None:
+            sample["sensor_cpu_pct"] = cpu_percent
+
+        self._last_cpu = current
+        self._last_monotonic = now
+        return sample
+
+
+def _percentile(values: List[float], percentile: float) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, int(round(percentile * (len(ordered) - 1)))))
+    return round(ordered[index], 3)
+
+
+def _performance_metric_summary(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    for metric in _PERFORMANCE_METRICS:
+        values = [
+            float(sample[metric]) for sample in samples
+            if isinstance(sample.get(metric), (int, float))
+        ]
+        if not values:
+            continue
+        summary[metric] = {
+            "average": round(sum(values) / len(values), 3),
+            "p95": _percentile(values, 0.95),
+            "max": round(max(values), 3),
+        }
+    return summary
+
+
+def _performance_report(
+    *,
+    samples: List[Dict[str, Any]],
+    source: str,
+    interval_seconds: Optional[float],
+    truncated: bool = False,
+    process_identity: Optional[List[Dict[str, Any]]] = None,
+    available: bool = True,
+    reason: Optional[str] = None,
+    restarts: Optional[int] = None,
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    report: Dict[str, Any] = {
+        "source": source,
+        "available": available,
+        "sample_count": len(samples),
+        "bounded": True,
+        "truncated": truncated,
+        "samples": samples,
+    }
+    if interval_seconds is not None:
+        report["interval_seconds"] = interval_seconds
+    metric_summary = _performance_metric_summary(samples)
+    report["summary"] = metric_summary
+    report["averages"] = {
+        metric: values["average"] for metric, values in metric_summary.items()
+    }
+    report["p95"] = {
+        metric: values["p95"] for metric, values in metric_summary.items()
+    }
+    report["max"] = {
+        metric: values["max"] for metric, values in metric_summary.items()
+    }
+    if process_identity is not None:
+        report["process_identity"] = process_identity
+    if restarts is not None:
+        report["process_restarts"] = restarts
+    if reason:
+        report["reason"] = reason
+    if error:
+        report["error"] = error
+    return report
+
+
+def _parse_performance_csv(path: Path) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    truncated = False
+    try:
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                sample: Dict[str, Any] = {}
+                timestamp = row.get("ts_utc")
+                if timestamp:
+                    sample["timestamp"] = timestamp[:64]
+                for source_field, target_field in _PERFORMANCE_CSV_FIELDS.items():
+                    value = row.get(source_field)
+                    if value is None or value == "":
+                        continue
+                    try:
+                        number = float(value)
+                    except ValueError:
+                        continue
+                    if math.isfinite(number):
+                        sample[target_field] = number
+                if sample:
+                    rows.append(sample)
+                if len(rows) > _MAX_PERFORMANCE_SAMPLES:
+                    rows.pop(0)
+                    truncated = True
+                    break
+    except (OSError, csv.Error) as exc:
+        return _performance_report(
+            samples=[], source="kit-csv", interval_seconds=None,
+            available=False, error=f"{type(exc).__name__}: unable to read performance file"
+        )
+
+    timestamps = [
+        _utc_epoch(row.get("timestamp")) for row in rows if row.get("timestamp")
+    ]
+    interval = None
+    if len(timestamps) > 1:
+        interval = round(
+            (timestamps[-1] - timestamps[0]) / (len(timestamps) - 1), 3
+        )
+    return _performance_report(
+        samples=rows, source="kit-csv", interval_seconds=interval,
+        truncated=truncated, process_identity=[],
+    )
+
+
+def _annotate_performance_phases(
+    performance: Dict[str, Any], results: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    starts = [
+        _utc_epoch(result.get("started_at")) for result in results
+        if result.get("verdict") != "skipped" and _utc_epoch(result.get("started_at"))
+    ]
+    finishes = [
+        _utc_epoch(result.get("finish_time")) for result in results
+        if result.get("verdict") != "skipped" and _utc_epoch(result.get("finish_time"))
+    ]
+    samples = performance.get("samples")
+    if not starts or not finishes or not isinstance(samples, list):
+        return performance
+
+    attack_start = min(starts) - 5.0
+    attack_finish = max(finishes) + 5.0
+    idle_floor = attack_start - 3600.0
+    phase_samples: Dict[str, List[Dict[str, Any]]] = {"idle": [], "attack": []}
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        timestamp = _utc_epoch(sample.get("timestamp"))
+        if timestamp is None:
+            continue
+        if idle_floor <= timestamp < attack_start:
+            sample["phase"] = "idle"
+            phase_samples["idle"].append(sample)
+        elif timestamp <= attack_finish:
+            sample["phase"] = "attack"
+            phase_samples["attack"].append(sample)
+
+    performance["phases"] = {
+        phase: {"sample_count": len(items), "summary": _performance_metric_summary(items)}
+        for phase, items in phase_samples.items()
+    }
+    return performance
+
+
+_SENSITIVE_LOG_PATTERNS = [
+    re.compile(r"(?i)(x-api-key\s*[:=]\s*)\S+"),
+    re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer|basic|token)\s+)\S+"),
+    re.compile(
+        r'(?i)((?:password|passwd|secret|token|api[_-]?key)"?\s*[:=]\s*)'
+        r'(?:"[^"\n]*"|\'[^\n]*\'|\S+)'
+    ),
+    re.compile(r"(?i)((?:token|api[_-]?key|secret|password)=)[^&\s]+"),
+    re.compile(r"(?i)(cookie\s*[:=]\s*)\S+"),
+]
+_AWS_ACCESS_KEY_PATTERN = re.compile(r"(?i)\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")
+
+
+def _redact_log_text(text: str) -> str:
+    redacted = text
+    for pattern in _SENSITIVE_LOG_PATTERNS:
+        redacted = pattern.sub(r"\1<redacted>", redacted)
+    redacted = _AWS_ACCESS_KEY_PATTERN.sub("<redacted>", redacted)
+    return redacted
+
+
+def _sensor_log_paths(plat: str) -> List[Path]:
+    override = os.environ.get("UEC_SENSOR_LOG_PATH")
+    if override:
+        return [Path(override)] if override.strip() else []
+    if plat == "windows":
+        programData = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
+        roots = [
+            programData / "UEC" / "Sensor" / "Logs",
+            programData / "UEC Sensor" / "Logs",
+            programData / "Infopercept" / "UecSensor" / "logs",
+        ]
+        return sorted(
+            path for root in roots
+            for path in root.rglob("*.log")
+        )[:40]
+    if plat == "macos":
+        return sorted(Path("/Library/Logs/UECSensor").glob("*.log"))[:40]
+    if plat == "linux":
+        return sorted(Path("/var/log/uec-sensor").rglob("*.log"))[:40]
+    return []
+
+
+def _collect_uec_sensor_logs(plat: str) -> List[Dict[str, Any]]:
+    """Collect a bounded, redacted tail of local UEC sensor logs."""
+    try:
+        max_lines = max(0, min(int(os.environ.get("UEC_SENSOR_LOG_LINES", "200")), 2000))
+    except ValueError:
+        max_lines = 200
+    logs: List[Dict[str, Any]] = []
+    total_bytes = 0
+    for path in _sensor_log_paths(plat):
+        try:
+            if not path.is_file():
+                continue
+            text = _redact_log_text(
+                _tail_text(path, min(131_072, max_lines * 4096), max_lines)
+            )
+            payload_bytes = len(text.encode("utf-8"))
+            if total_bytes + payload_bytes > 131_072:
+                remaining = max(0, 131_072 - total_bytes)
+                text = text[:remaining]
+                payload_bytes = len(text.encode("utf-8"))
+            total_bytes += payload_bytes
+            logs.append({
+                "source": "uec-sensor",
+                "path": str(path),
+                "lines": text.splitlines(),
+            })
+            if total_bytes >= 131_072:
+                break
+        except Exception as exc:
+            logs.append({
+                "source": "uec-sensor",
+                "path": str(path),
+                "error": f"{type(exc).__name__}: unable to read log",
+            })
+    return logs
+
+
+def _utc_epoch(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _uec_detection_payload(value: Any) -> str:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            pass
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):
+        text = str(value)
+    return _redact_log_text(text)[:1500]
+
+
+def _uec_detection_techniques(value: Any) -> List[str]:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, dict):
+        return []
+    values = value.get("techniques") or value.get("attackTechniques")
+    if not isinstance(values, list):
+        return []
+    return [str(item).upper() for item in values if item]
+
+
+def _uec_technique_matches(expected: Optional[str], actual: List[str]) -> bool:
+    if not expected or not actual:
+        return False
+    parent = expected.upper().split(".", 1)[0]
+    return any(
+        value.upper() == expected or value.upper().split(".", 1)[0] == parent
+        for value in actual
+    )
+
+
+def _correlate_uec_findings(
+    results: List[Dict[str, Any]], plat: str
+) -> Dict[str, Any]:
+    """Correlate Linux UEC findings directly from the sensor SQLite database.
+
+    The query is local, read-only, and bounded to the complete test interval
+    plus five seconds on either side. Remote UEC correlation remains a backend
+    concern and is intentionally not attempted here.
+    """
+    metadata: Dict[str, Any] = {
+        "source": "uec-sensor-db",
+        "platform": plat,
+        "matched": 0,
+        "promoted": 0,
+    }
+    if plat != "linux":
+        metadata["available"] = False
+        metadata["reason"] = "Direct database correlation is supported on Linux"
+        return metadata
+
+    windows: List[Tuple[Dict[str, Any], float, float]] = []
+    for result in results:
+        if result.get("verdict") == "skipped":
+            continue
+        start = _utc_epoch(result.get("started_at"))
+        finish = _utc_epoch(result.get("finish_time"))
+        if start is None:
+            continue
+        if finish is None:
+            finish = datetime.now(timezone.utc).timestamp()
+        windows.append((result, start - 5.0, finish + 5.0))
+
+    if not windows:
+        metadata["available"] = False
+        metadata["reason"] = "No executed test intervals were available"
+        return metadata
+
+    db_path = Path(os.environ.get("UEC_DB", "/var/lib/uec-sensor/uec-sensor.db"))
+    try:
+        # is_file() stats the path, which raises PermissionError (not caught below) when the
+        # agent runs as a non-root user and /var/lib/uec-sensor/ is root-only (the common case).
+        db_exists = db_path.is_file()
+    except OSError as exc:
+        metadata["available"] = False
+        metadata["reason"] = f"{type(exc).__name__}: unable to read UEC database (permission denied)"
+        return metadata
+    if not db_exists:
+        metadata["available"] = False
+        metadata["reason"] = "UEC sensor database was not found"
+        return metadata
+
+    query_start = min(window[1] for window in windows)
+    query_finish = max(window[2] for window in windows)
+    try:
+        connection = sqlite3.connect(
+            f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=2.0
+        )
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            rows = connection.execute(
+                """
+                SELECT id, detected_at_unix, state, payload
+                FROM detection_findings
+                WHERE CAST(detected_at_unix AS REAL) BETWEEN ? AND ?
+                ORDER BY detected_at_unix, id
+                """,
+                (query_start, query_finish),
+            ).fetchall()
+        finally:
+            connection.close()
+    except (sqlite3.Error, OSError) as exc:
+        metadata["available"] = False
+        metadata["reason"] = f"{type(exc).__name__}: unable to read UEC database"
+        return metadata
+
+    metadata["available"] = True
+    metadata["findings"] = len(rows)
+    metadata["observed"] = 0
+    for row_id, detected_at, state, payload in rows:
+        try:
+            detected_epoch = float(detected_at)
+        except (TypeError, ValueError):
+            continue
+        for result, start, finish in windows:
+            if not (start <= detected_epoch <= finish):
+                continue
+            finding_techniques = _uec_detection_techniques(payload)
+            result_technique = result.get("technique_id")
+            # If the finding carries ATT&CK tags, require a parent/sub-technique
+            # match. Findings without tags remain evidence but cannot promote a
+            # verdict on a busy, overlapping host.
+            authoritative_match = _uec_technique_matches(result_technique, finding_techniques)
+            logs = result.setdefault("agent_logs", [])
+            if sum(1 for item in logs if item.get("phase") == "uec_detection") >= 10:
+                continue
+            logs.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "level": "info",
+                "phase": "uec_detection",
+                "message": "Matched a UEC detection finding",
+                "source": "uec-sensor-db",
+                "detection_id": row_id,
+                "detected_at_unix": detected_epoch,
+                "state": state,
+                "payload": _uec_detection_payload(payload),
+            })
+            result["uec_detection_count"] = result.get("uec_detection_count", 0) + 1
+            if authoritative_match:
+                metadata["matched"] += 1
+            else:
+                metadata["observed"] += 1
+
+            completed = (
+                result.get("process_started") is True
+                and result.get("timed_out") is not True
+                and result.get("exit_code") is not None
+            )
+            if result.get("verdict") == "allowed" and completed and authoritative_match:
+                result["verdict"] = "detected"
+                result["error_message"] = (
+                    "UEC detection evidence matched the test interval; "
+                    "the process completed without a block"
+                )
+                result.setdefault("agent_logs", []).append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "level": "info",
+                    "phase": "uec_correlation",
+                    "message": "Promoted allowed result to detected",
+                    "source": "uec-sensor-db",
+                })
+                metadata["promoted"] += 1
+
+    return metadata
+
+
+def _tail_text(path: Path, byte_limit: int, line_limit: int) -> str:
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        handle.seek(max(0, size - byte_limit))
+        raw = handle.read(byte_limit)
+    text = raw.decode("utf-8", errors="replace")
+    # A partial first UTF-8 character or sliced line is harmless, but drop the
+    # incomplete prefix so the UI does not show a misleading log fragment.
+    return "\n".join(text.splitlines()[-line_limit:])
+
+
+def _build_debug_logs(results: List[Dict[str, Any]], tests_by_id: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    logs: List[Dict[str, Any]] = []
+    for result in results:
+        test = tests_by_id.get(result.get("test_id", ""), {})
+        logs.append({
+            "timestamp": result.get("started_at"),
+            "level": (
+                "info" if result.get("verdict") in ("blocked", "detected", "allowed")
+                else "error"
+            ),
+            "test_id": result.get("test_id", ""),
+            "technique_id": result.get("technique_id", ""),
+            "command": _redact_log_text(test.get("command", ""))[:2000],
+            "executor": test.get("executor", ""),
+            "verdict": result.get("verdict", "error"),
+            "exit_code": result.get("exit_code"),
+            "stdout": _redact_log_text(result.get("stdout", ""))[:4000],
+            "stderr": _redact_log_text(result.get("stderr", ""))[:4000],
+            "agent_log_count": len(result.get("agent_logs", [])),
+        })
+    return logs
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +1329,7 @@ def _print_banner(plat: str, hostname: str, os_ver: str) -> None:
 {_c('    Atomic Prevention  Prevention Validation Agent  v' + __version__, _CYAN)}
 {_c('    Python Cross-Platform Runner', _CYAN)}
 {_c('  ============================================================', _CYAN)}
-{_c('    AUTHORIZED SECURITY TESTING ONLY', _CYAN)}
+{_c('    Authorized security testing only', _CYAN)}
 {_c('    Ensure you have explicit permission before proceeding.', _CYAN)}
 {_c('  ============================================================', _CYAN)}
 {_c('    Hostname : ' + hostname, _WHITE)}
@@ -586,6 +1368,10 @@ def _print_verdict_line(
         print(f"{prefix} {_c('BLOCKED', _GREEN)} {technique_id} | {test_name}")
         if guidance and guidance.get("if_blocked"):
             print(f"         {_c(guidance['if_blocked'], _DARK_GREEN)}")
+    elif verdict == "detected":
+        print(f"{prefix} {_c('DETECTED', _CYAN)} {technique_id} | {test_name}")
+        if reason:
+            print(f"         {_c(reason, _DARK_CYAN)}")
     elif verdict == "allowed":
         print(f"{prefix} {_c('ALLOWED', _RED)} {technique_id} | {test_name}")
         if guidance and guidance.get("if_allowed"):
@@ -603,22 +1389,25 @@ def _print_verdict_line(
 def _print_summary(
     total: int,
     blocked: int,
+    detected: int,
     allowed: int,
     errors: int,
     skipped: int,
 ) -> None:
     print()
     print(_c("  ============================================================", _CYAN))
-    print(_c("    RESULTS SUMMARY", _CYAN))
+    print(_c("    Results summary", _CYAN))
     print(_c("  ============================================================", _CYAN))
     print(f"{_c('    Total tests : ', _WHITE)}{total}")
     print(f"{_c('    Blocked     : ', _WHITE)}{_c(str(blocked), _GREEN)}")
+    print(f"{_c('    Detected    : ', _WHITE)}{_c(str(detected), _CYAN)}")
     print(f"{_c('    Allowed     : ', _WHITE)}{_c(str(allowed), _RED)}")
     print(f"{_c('    Errors      : ', _WHITE)}{_c(str(errors), _YELLOW)}")
     print(f"{_c('    Skipped     : ', _WHITE)}{_c(str(skipped), _DARK_GRAY)}")
     print(_c("  ============================================================", _CYAN))
 
-    executed = blocked + allowed
+    executed = blocked + detected + allowed
+    visible = blocked + detected
     if executed > 0:
         score = round((blocked / executed) * 100, 1)
         if score >= 80:
@@ -627,7 +1416,9 @@ def _print_summary(
             score_color = _YELLOW
         else:
             score_color = _RED
-        print(f"{_c('    Prevention  : ', _WHITE)}{_c(f'{score}% ({blocked}/{executed} tests blocked)', score_color)}")
+        visibility = round((visible / executed) * 100, 1)
+        print(f"{_c('    Prevention : ', _WHITE)}{_c(f'{score}% ({blocked}/{executed} tests blocked)', score_color)}")
+        print(f"{_c('    Visibility : ', _WHITE)}{_c(f'{visibility}% ({visible}/{executed} tests blocked or detected)', score_color)}")
         print(_c("  ============================================================", _CYAN))
 
     print()
@@ -642,10 +1433,10 @@ def _print_remediation(
         return
 
     print(_c("  ============================================================", _RED))
-    print(_c("    REMEDIATION NEEDED", _RED))
+    print(_c("    Remediation needed", _RED))
     print(_c("  ============================================================", _RED))
     print()
-    print(f"    The following {len(allowed_results)} test(s) were NOT blocked:")
+    print(f"    The following {len(allowed_results)} test(s) were not blocked:")
     print()
 
     for i, res in enumerate(allowed_results, 1):
@@ -671,6 +1462,21 @@ def _print_remediation(
 
     print(_c("  ============================================================", _RED))
     print()
+
+
+def _summarize_results(results: List[Dict[str, Any]]) -> Dict[str, int]:
+    summary = {
+        "blocked": 0,
+        "detected": 0,
+        "allowed": 0,
+        "error": 0,
+        "skipped": 0,
+    }
+    for result in results:
+        verdict = result.get("verdict", "error")
+        key = verdict if verdict in summary else "error"
+        summary[key] += 1
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -700,6 +1506,23 @@ def _write_log_line(
         pass
 
 
+def _bounded_debug_log_items(
+    logs: Optional[List[Dict[str, Any]]]
+) -> List[Dict[str, Any]]:
+    if not logs:
+        return []
+    bounded: List[Dict[str, Any]] = []
+    for item in logs[-200:]:
+        if not isinstance(item, dict):
+            continue
+        compact = dict(item)
+        for field in ("stdout", "stderr", "command"):
+            if isinstance(compact.get(field), str):
+                compact[field] = compact[field][:2000]
+        bounded.append(compact)
+    return bounded
+
+
 # ---------------------------------------------------------------------------
 # Results upload
 # ---------------------------------------------------------------------------
@@ -710,6 +1533,13 @@ def _upload_results(
     playbook_id: str,
     hostname: str,
     all_results: List[Dict[str, Any]],
+    platform_name: str = "",
+    os_version: str = "",
+    sensor_logs: Optional[List[Dict[str, Any]]] = None,
+    debug_logs: Optional[List[Dict[str, Any]]] = None,
+    run_started_at: Optional[str] = None,
+    run_completed_at: Optional[str] = None,
+    performance: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
     """POST results to the Atomic Prevention server.
 
@@ -725,6 +1555,13 @@ def _upload_results(
             "exit_code": r["exit_code"],
             "error_message": r["error_message"],
             "execution_time_ms": r["execution_time_ms"],
+            "executed_at": r.get("started_at"),
+            "started_at": r.get("started_at"),
+            "finish_time": r.get("finish_time"),
+            "completed_at": r.get("completed_at"),
+            "stdout": r.get("stdout", ""),
+            "stderr": r.get("stderr", ""),
+            "agent_logs": (r.get("agent_logs") or [])[-100:],
         })
 
     if not payloads:
@@ -733,6 +1570,15 @@ def _upload_results(
     body = json.dumps({
         "playbook_id": playbook_id,
         "hostname": hostname,
+        "agent_name": "python-agent",
+        "started_at": run_started_at,
+        "completed_at": run_completed_at,
+        "platform": platform_name,
+        "os_version": os_version,
+        "agent_version": __version__,
+        "sensor_logs": sensor_logs or [],
+        "debug_logs": _bounded_debug_log_items(debug_logs),
+        "performance": performance or {},
         "results": payloads,
     }).encode("utf-8")
 
@@ -821,7 +1667,7 @@ def run_playbook(
     print(f"  {_c('[*] Timeout   : ' + str(timeout_seconds) + 's per test', _WHITE)}")
 
     if dry_run:
-        print(f"  {_c('[*] Mode      : DRY RUN (no commands will be executed)', _YELLOW)}")
+        print(f"  {_c('[*] Mode      : Dry run (no commands will be executed)', _YELLOW)}")
 
     print()
 
@@ -857,8 +1703,23 @@ def run_playbook(
     # ------------------------------------------------------------------
     # Execute tests
     # ------------------------------------------------------------------
+    run_started_at = datetime.now(timezone.utc).isoformat()
+    performance_file = os.environ.get("ATOMIC_PREVENTION_PERF_FILE", "").strip()
+    if performance_file:
+        performance = _parse_performance_csv(Path(performance_file))
+        benchmark_sampler = None
+    else:
+        benchmark_sampler = _UecBenchmarkSampler()
+        benchmark_sampler.start()
+
     all_results: List[Dict[str, Any]] = []
-    summary = {"blocked": 0, "allowed": 0, "error": 0, "skipped": 0}
+    summary = {
+        "blocked": 0,
+        "detected": 0,
+        "allowed": 0,
+        "error": 0,
+        "skipped": 0,
+    }
 
     total_tests = len(tests)
     for idx, test in enumerate(tests, 1):
@@ -880,10 +1741,17 @@ def run_playbook(
                 "test_name": test_name,
                 "technique_id": technique_id,
                 "verdict": "skipped",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "finish_time": None,
+                "completed_at": None,
                 "exit_code": None,
                 "error_message": f"Test not applicable to platform: {plat}",
                 "execution_time_ms": 0,
+                "stdout": "",
+                "stderr": "",
+                "agent_logs": [],
             })
+            _finalize_result(all_results[-1])
             continue
 
         # Elevation check
@@ -895,11 +1763,18 @@ def run_playbook(
                 "test_name": test_name,
                 "technique_id": technique_id,
                 "verdict": "skipped",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "finish_time": None,
+                "completed_at": None,
                 "exit_code": None,
                 "error_message": "Test requires root but agent is not running as root",
                 "execution_time_ms": 0,
+                "stdout": "",
+                "stderr": "",
+                "agent_logs": [],
             }
             all_results.append(skip_result)
+            _finalize_result(skip_result)
             _write_log_line(
                 log_path, test_name, technique_id, "error",
                 "Skipped: requires root", 0, None,
@@ -937,7 +1812,9 @@ def run_playbook(
                 print(f"         {_c('stderr: ' + stderr_preview, _DARK_GRAY)}")
 
         # Log
-        log_verdict = verdict if verdict in ("blocked", "allowed", "error") else "error"
+        log_verdict = (
+            verdict if verdict in ("blocked", "detected", "allowed", "error") else "error"
+        )
         _write_log_line(
             log_path, test_name, technique_id, log_verdict,
             test_result.get("error_message", ""),
@@ -945,8 +1822,8 @@ def run_playbook(
             test_result.get("exit_code"),
         )
 
-        # Cleanup (only if the test was allowed and not in dry-run mode)
-        if verdict == "allowed" and not dry_run:
+        # Cleanup after a process ran, including detection-only outcomes.
+        if verdict in ("allowed", "detected") and not dry_run:
             _run_cleanup(
                 test.get("cleanup_command"),
                 test.get("executor", "sh"),
@@ -954,10 +1831,34 @@ def run_playbook(
             )
 
     # ------------------------------------------------------------------
+    # Local UEC correlation is deliberately separate from backend remote UEC
+    # correlation. On Linux it uses the sensor's SQLite database directly.
+    # ------------------------------------------------------------------
+    # Belt-and-suspenders: this is optional enrichment uploaded with the run, never a
+    # reason to lose 43 tests' worth of results to an unanticipated local-DB error.
+    try:
+        uec_correlation = _correlate_uec_findings(all_results, plat)
+    except Exception as exc:
+        uec_correlation = {"available": False, "reason": f"{type(exc).__name__}: correlation failed"}
+    summary = _summarize_results(all_results)
+    run_completed_at = datetime.now(timezone.utc).isoformat()
+    if benchmark_sampler is not None:
+        performance = benchmark_sampler.stop()
+    performance = _annotate_performance_phases(performance, all_results)
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
-    _print_summary(total_tests, summary["blocked"], summary["allowed"],
-                   summary["error"], summary["skipped"])
+    sensor_logs = _collect_uec_sensor_logs(plat)
+    debug_logs = _build_debug_logs(all_results, tests_by_id)
+    _print_summary(
+        total_tests,
+        summary["blocked"],
+        summary["detected"],
+        summary["allowed"],
+        summary["error"],
+        summary["skipped"],
+    )
 
     # Remediation
     allowed_results = [r for r in all_results if r["verdict"] == "allowed"]
@@ -969,25 +1870,40 @@ def run_playbook(
     output_payload: Dict[str, Any] = {
         "atomic_prevention_version": __version__,
         "agent": "python",
+        "agent_name": "python-agent",
         "run_timestamp": datetime.now(timezone.utc).isoformat(),
+        "started_at": run_started_at,
+        "completed_at": run_completed_at,
         "hostname": hostname,
         "platform": plat,
         "os_version": os_ver,
+        "agent_version": __version__,
         "playbook": {
             "id": pb_meta.get("id", ""),
             "name": pb_meta.get("name", ""),
             "adversary_group": pb_meta.get("adversary_group", ""),
         },
         "summary": summary,
+        "metadata": {"uec_detection_correlation": uec_correlation},
+        "performance": performance,
+        "sensor_logs": sensor_logs,
+        "debug_logs": debug_logs,
         "results": [
             {
                 "test_id": r["test_id"],
                 "test_name": r.get("test_name", ""),
                 "technique_id": r.get("technique_id", ""),
                 "verdict": r["verdict"],
+                "started_at": r.get("started_at"),
+                "finish_time": r.get("finish_time"),
+                "completed_at": r.get("completed_at"),
                 "exit_code": r["exit_code"],
                 "error_message": r["error_message"],
                 "execution_time_ms": r["execution_time_ms"],
+                "stdout": r.get("stdout", ""),
+                "stderr": r.get("stderr", ""),
+                "agent_logs": r.get("agent_logs", []),
+                "uec_detection_count": r.get("uec_detection_count", 0),
             }
             for r in all_results
         ],
@@ -1010,12 +1926,14 @@ def run_playbook(
             server_url, results_endpoint,
             pb_meta.get("id", ""),
             hostname, all_results,
+            plat, os_ver, sensor_logs, debug_logs,
+            run_started_at, run_completed_at, performance,
         )
         if success:
             print(f"  {_c('Upload successful. Run ID: ' + str(run_id_or_err), _GREEN)}")
             if srv_summary:
                 print(
-                    f"  {_c('Server summary -- Blocked: ' + str(srv_summary.get('blocked', 0)) + ', Allowed: ' + str(srv_summary.get('allowed', 0)) + ', Error: ' + str(srv_summary.get('error', 0)), _CYAN)}"
+                    f"  {_c('Server summary -- Blocked: ' + str(srv_summary.get('blocked', 0)) + ', Detected: ' + str(srv_summary.get('detected', 0)) + ', Allowed: ' + str(srv_summary.get('allowed', 0)) + ', Error: ' + str(srv_summary.get('error', 0)), _CYAN)}"
                 )
         else:
             print(f"  {_c('[!] Failed to upload results: ' + str(run_id_or_err), _YELLOW)}")

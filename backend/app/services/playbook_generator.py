@@ -184,6 +184,7 @@ class PlaybookGenerator:
                 "guidance": {
                     "what_this_tests": self._build_test_explanation(t, tech_info),
                     "if_blocked": "Your preventative controls successfully stopped this technique. This is the desired outcome.",
+                    "if_detected": "Your controls observed this technique, but detection alone did not stop execution. Review the prevention policy gap.",
                     "if_allowed": self._build_remediation(t, tech_info),
                     "mitre_reference": tech_info.get("url", ""),
                 },

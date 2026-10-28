@@ -28,10 +28,12 @@
     --sidebar: 0.97 0.004 255;
 
     --status-ok: 160 84% 39%;
+    --status-info: 212 88% 50%;
     --status-degraded: 43 96% 56%;
     --status-error: 0 84% 60%;
     --status-idle: 215 20% 65%;
     --status-ok-text: 163 94% 24%;
+    --status-info-text: 213 84% 38%;
     --status-degraded-text: 26 90% 37%;
     --status-error-text: 0 72% 51%;
     --status-idle-text: 215 16% 47%;
@@ -55,6 +57,7 @@
     --sidebar: 0.145 0 0;
 
     --status-ok-text: 158 64% 52%;
+    --status-info-text: 211 92% 70%;
     --status-degraded-text: 46 97% 65%;
     --status-error-text: 0 91% 71%;
     --status-idle-text: 215 20% 65%;

@@ -42,6 +42,30 @@ function Send-Results {
         [object[]]$Results,
 
         [Parameter()]
+        [string]$StartedAt,
+
+        [Parameter()]
+        [string]$CompletedAt,
+
+        [Parameter()]
+        [string]$Platform = '',
+
+        [Parameter()]
+        [string]$OsVersion = '',
+
+        [Parameter()]
+        [string]$AgentVersion = '',
+
+        [Parameter()]
+        [object[]]$SensorLogs = @(),
+
+        [Parameter()]
+        [object[]]$DebugLogs = @(),
+
+        [Parameter()]
+        [hashtable]$Performance = @{},
+
+        [Parameter()]
         [string]$ResultsEndpoint = '/api/results/submit'
     )
 
@@ -54,6 +78,19 @@ function Send-Results {
 
     # Build the request body matching SubmitResultsRequest
     $hostname = try { [System.Net.Dns]::GetHostName() } catch { $env:COMPUTERNAME }
+    $uploadDebugLogs = @()
+    foreach ($logItem in @($DebugLogs | Select-Object -Last 200)) {
+        if ($logItem -is [hashtable]) {
+            $compactLog = $logItem.Clone()
+            foreach ($textField in @('stdout', 'stderr', 'command')) {
+                $textValue = [string]$compactLog[$textField]
+                if ($compactLog.ContainsKey($textField) -and $textValue.Length -gt 2000) {
+                    $compactLog[$textField] = $textValue.Substring(0, 2000)
+                }
+            }
+            $uploadDebugLogs += $compactLog
+        }
+    }
 
     $resultPayloads = @()
     foreach ($r in $Results) {
@@ -66,6 +103,12 @@ function Send-Results {
             exit_code         = $r.ExitCode
             error_message     = $r.ErrorMessage
             execution_time_ms = $r.ExecutionTimeMs
+            executed_at       = $(if ($r.StartedAt) { $r.StartedAt } else { $r.started_at })
+            started_at        = $(if ($r.StartedAt) { $r.StartedAt } else { $r.started_at })
+            completed_at      = $(if ($r.CompletedAt) { $r.CompletedAt } else { $r.completed_at })
+            stdout            = $r.StdOut
+            stderr            = $r.StdErr
+            agent_logs        = @($r.AgentLogs | Select-Object -Last 100)
         }
     }
 
@@ -78,6 +121,15 @@ function Send-Results {
     $body = @{
         playbook_id = $PlaybookId
         hostname    = $hostname
+        agent_name  = 'powershell-agent'
+        started_at = $StartedAt
+        completed_at = $CompletedAt
+        platform = $Platform
+        os_version = $OsVersion
+        agent_version = $AgentVersion
+        sensor_logs = @($SensorLogs)
+        debug_logs = @($uploadDebugLogs)
+        performance = $Performance
         results     = $resultPayloads
     } | ConvertTo-Json -Depth 10
 
@@ -101,7 +153,7 @@ function Send-Results {
         Write-Host "  Upload successful. Run ID: $($response.RunId)" -ForegroundColor Green
 
         if ($response.Summary) {
-            Write-Host "  Server summary -- Blocked: $($response.Summary.blocked), Allowed: $($response.Summary.allowed), Error: $($response.Summary.error)" -ForegroundColor Cyan
+            Write-Host "  Server summary -- Blocked: $($response.Summary.blocked), Detected: $($response.Summary.detected), Allowed: $($response.Summary.allowed), Error: $($response.Summary.error)" -ForegroundColor Cyan
         }
     }
     catch {

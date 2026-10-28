@@ -1,4 +1,4 @@
-.PHONY: build run stop wait sync dev-backend dev-frontend install-backend install-frontend clean push
+.PHONY: build run stop wait sync dev-backend dev-frontend install-backend install-frontend test test-backend test-frontend clean push
 
 API_URL ?= http://localhost:3000
 IMAGE ?= ghcr.io/anubhavg-icpl/atomic-prevention:latest
@@ -38,6 +38,14 @@ sync: wait
 	@echo "Done! Check stats at $(API_URL)/api/techniques/stats"
 
 # Local development targets
+test-backend:
+	python -m pytest -q
+
+test-frontend:
+	cd frontend && npm run typecheck && npm run build
+
+test: test-backend test-frontend
+
 install-backend:
 	cd backend && pip install -r requirements.txt
 

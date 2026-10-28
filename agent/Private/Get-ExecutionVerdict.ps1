@@ -32,10 +32,19 @@ function Get-ExecutionVerdict {
         'quarantined'
     )
     $blockIndicator = $blockIndicators | Where-Object { $evidence -like "*$_*" } | Select-Object -First 1
+    $detectIndicator = $null
+    $detectMatch = [regex]::Match(
+        $evidence,
+        '(?i)(?<!not )\bdetected\b|(?<!no )\bdetection\b|(?<!not )\balerted\b|\balert triggered\b|(?<!not )\bsuspicious\b|\bthreat found\b|\bsigma match\b|\bpolicy audit\b|\baudit event\b'
+    )
+    if ($detectMatch.Success) { $detectIndicator = $detectMatch.Value }
 
     if (-not $ProcessStarted) {
         if ($blockIndicator) {
             return @{ Verdict = 'blocked'; Reason = "Security control prevented execution: $startupReason" }
+        }
+        if ($detectIndicator) {
+            return @{ Verdict = 'detected'; Reason = "Detection indicator observed without a block (${detectIndicator}): $startupReason" }
         }
         return @{ Verdict = 'error'; Reason = "Process failed to start: $startupReason" }
     }
@@ -46,6 +55,10 @@ function Get-ExecutionVerdict {
 
     if ($blockIndicator) {
         return @{ Verdict = 'blocked'; Reason = "Security control evidence observed: $blockIndicator" }
+    }
+
+    if ($detectIndicator) {
+        return @{ Verdict = 'detected'; Reason = "Detection indicator observed without a block: $detectIndicator" }
     }
 
     if ($null -eq $ExitCode) {

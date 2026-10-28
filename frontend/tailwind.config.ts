@@ -25,10 +25,12 @@ const config: Config = {
         sidebar: oklch("sidebar"),
         status: {
           ok: hsl("status-ok"),
+          info: hsl("status-info"),
           degraded: hsl("status-degraded"),
           error: hsl("status-error"),
           idle: hsl("status-idle"),
           "ok-text": hsl("status-ok-text"),
+          "info-text": hsl("status-info-text"),
           "degraded-text": hsl("status-degraded-text"),
           "error-text": hsl("status-error-text"),
           "idle-text": hsl("status-idle-text"),

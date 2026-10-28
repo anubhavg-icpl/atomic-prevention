@@ -84,16 +84,41 @@ export interface PlaybookRunSummary {
   id: string;
   hostname: string;
   started_at: string | null;
-  summary: { blocked: number; allowed: number; error: number };
+  summary: ResultSummary;
 }
+
+export type TestVerdict = "blocked" | "detected" | "allowed" | "error";
+
+export interface ResultSummary {
+  blocked: number;
+  detected?: number;
+  allowed: number;
+  error: number;
+}
+
+export type EvidenceLog = Record<string, unknown>;
+
+export type RunPerformance = Record<string, unknown>;
 
 export interface TestResultItem {
   id: string;
   test_id: string;
-  verdict: "blocked" | "allowed" | "error";
+  test_name?: string;
+  technique_id?: string;
+  source?: string;
+  command?: string;
+  executor?: string;
+  verdict: TestVerdict;
   exit_code: number | null;
   error_message: string | null;
   execution_time_ms: number;
+  executed_at?: string | null;
+  completed_at?: string | null;
+  stdout?: string;
+  stderr?: string;
+  agent_logs?: EvidenceLog[];
+  uec_match_status?: string;
+  uec_matches?: EvidenceLog[];
 }
 
 export interface RunDetail {
@@ -102,7 +127,16 @@ export interface RunDetail {
   hostname: string;
   started_at: string | null;
   completed_at: string | null;
-  summary: { blocked: number; allowed: number; error: number };
+  platform?: string;
+  os_version?: string;
+  agent_name?: string;
+  agent_version?: string;
+  summary: ResultSummary;
+  sensor_logs?: EvidenceLog[];
+  debug_logs?: EvidenceLog[];
+  performance?: RunPerformance;
+  uec_match_status?: string;
+  uec_device_id?: string;
   results: TestResultItem[];
 }
 
@@ -126,7 +160,10 @@ export interface GeneratePlaybookRequest {
 
 export interface PreventionStats {
   prevention_score: number;
+  detection_score?: number;
+  visibility_score?: number;
   total_blocked: number;
+  total_detected?: number;
   total_allowed: number;
   total_error: number;
   total_runs: number;
@@ -250,11 +287,20 @@ export async function submitResults(data: {
   hostname: string;
   results: {
     test_id: string;
-    verdict: string;
+    verdict: TestVerdict;
     exit_code?: number;
     error_message?: string;
     execution_time_ms?: number;
+    executed_at?: string;
+    stdout?: string;
+    stderr?: string;
+    agent_logs?: EvidenceLog[];
   }[];
+  platform?: string;
+  os_version?: string;
+  agent_version?: string;
+  sensor_logs?: EvidenceLog[];
+  debug_logs?: EvidenceLog[];
 }): Promise<{ run_id: string; summary: Record<string, number> }> {
   return apiFetch("/api/results/submit", {
     method: "POST",
@@ -313,9 +359,117 @@ export async function fetchPreventionStats(): Promise<PreventionStats> {
   return apiFetch("/api/results/stats");
 }
 
-export async function fetchTechniqueVerdicts(): Promise<Record<string, "blocked" | "allowed" | "untested">> {
-  const data = await apiFetch<{ verdicts: Record<string, "blocked" | "allowed" | "untested"> }>("/api/results/verdicts");
+export async function fetchTechniqueVerdicts(): Promise<Record<string, "blocked" | "detected" | "allowed" | "untested">> {
+  const data = await apiFetch<{ verdicts: Record<string, "blocked" | "detected" | "allowed" | "untested"> }>("/api/results/verdicts");
   return data.verdicts;
+}
+
+// ---- QA automation and integrations ----
+
+export interface IntegrationStatus {
+  claude: { configured: boolean; model: string };
+  gitlab: { configured: boolean; url: string };
+  uec: {
+    configured: boolean;
+    url: string;
+    tenant: string;
+    correlation_enabled: boolean;
+  };
+}
+
+export interface GitLabProject {
+  id: string;
+  name: string;
+  path_with_namespace: string;
+  web_url: string;
+  last_activity_at: string | null;
+  open_issues_count: number;
+}
+
+export interface QaFinding {
+  technique_id?: string;
+  test_id?: string;
+  status: TestVerdict;
+  severity?: string;
+  title: string;
+  detail?: string;
+  recommendation?: string;
+}
+
+export interface QaIssueDraft {
+  title: string;
+  description: string;
+  labels: string[];
+}
+
+export interface QaAnalysisResult {
+  summary?: string;
+  overall_status?: TestVerdict;
+  findings?: QaFinding[];
+  issue?: QaIssueDraft;
+  confidence?: string;
+  integration_notes?: string[];
+  usage?: { input_tokens?: number; output_tokens?: number; latency_ms?: number };
+  uec?: Record<string, unknown>;
+}
+
+export interface QaAnalysis {
+  id: string;
+  run_id: string;
+  provider: string;
+  model: string;
+  summary: string;
+  result: QaAnalysisResult;
+  created_at: string | null;
+  gitlab_issues?: GitLabIssueResult[];
+}
+
+export interface GitLabIssueResult {
+  id: string;
+  run_id: string;
+  project_id: string;
+  project_path: string;
+  iid: string;
+  title: string;
+  web_url: string;
+  created: "created" | "existing";
+  state: string;
+}
+
+export async function fetchIntegrationStatus(): Promise<IntegrationStatus> {
+  return apiFetch("/api/integrations/status");
+}
+
+export async function searchGitLabProjects(search: string): Promise<{ projects: GitLabProject[] }> {
+  return apiFetch(`/api/integrations/gitlab/projects?search=${encodeURIComponent(search)}`);
+}
+
+export async function analyzeQaRun(runId: string): Promise<QaAnalysis> {
+  return apiFetch(`/api/qa/runs/${encodeURIComponent(runId)}/analyze`, { method: "POST" });
+}
+
+export async function fetchQaAnalysis(runId: string): Promise<QaAnalysis> {
+  return apiFetch(`/api/qa/runs/${encodeURIComponent(runId)}/analysis`);
+}
+
+export async function createQaIssue(
+  analysisId: string,
+  request: { project_id: string; title?: string; description?: string; labels?: string[] }
+): Promise<GitLabIssueResult> {
+  return apiFetch(`/api/qa/analyses/${encodeURIComponent(analysisId)}/issue`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function createQaIssues(
+  analysisId: string,
+  request: { project_id: string; mode: "consolidated" | "finding"; title?: string; description?: string; labels?: string[] }
+): Promise<{ issues: GitLabIssueResult[]; mode: string }> {
+  return apiFetch(`/api/qa/analyses/${encodeURIComponent(analysisId)}/issues`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 // ---- Stats (aggregated) ----

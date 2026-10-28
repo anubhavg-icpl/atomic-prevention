@@ -14,6 +14,21 @@ services:
       MA_MITRE_CACHE_DIR: /app/data/mitre_cache
       MA_DEBUG: ${MA_DEBUG:-false}
       MA_CORS_ORIGINS: '${MA_CORS_ORIGINS:-["http://localhost:3000"]}'
+      MA_CLAUDE_ENABLED: ${MA_CLAUDE_ENABLED:-false}
+      MA_ANTHROPIC_API_KEY: ${MA_ANTHROPIC_API_KEY:-}
+      MA_ANTHROPIC_MODEL: ${MA_ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      MA_GITLAB_ENABLED: ${MA_GITLAB_ENABLED:-false}
+      MA_GITLAB_URL: ${MA_GITLAB_URL:-https://gitlab.invinsense.dev}
+      MA_GITLAB_TOKEN: ${MA_GITLAB_TOKEN:-}
+      MA_GITLAB_DEFAULT_PROJECT: ${MA_GITLAB_DEFAULT_PROJECT:-infopercept/xdr/uec/uec}
+      MA_GITLAB_AUTO_CREATE_ISSUES: ${MA_GITLAB_AUTO_CREATE_ISSUES:-false}
+      MA_GITLAB_AUTO_ISSUE_MODE: ${MA_GITLAB_AUTO_ISSUE_MODE:-finding}
+      MA_UEC_ENABLED: ${MA_UEC_ENABLED:-false}
+      MA_UEC_BASE_URL: ${MA_UEC_BASE_URL:-https://platform-dev.invinsense.dev/xdr/uec}
+      MA_UEC_TENANT: ${MA_UEC_TENANT:-default}
+      MA_UEC_TOKEN: ${MA_UEC_TOKEN:-}
+      MA_UEC_USERNAME: ${MA_UEC_USERNAME:-}
+      MA_UEC_PASSWORD: ${MA_UEC_PASSWORD:-}
     restart: unless-stopped
 
 volumes:

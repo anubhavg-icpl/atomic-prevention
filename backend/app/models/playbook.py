@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, String, JSON, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 
@@ -29,7 +29,16 @@ class PlaybookRun(Base):
     hostname = Column(String, default="")
     started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime, nullable=True)
-    summary = Column(JSON, default=dict)  # {"blocked": 5, "allowed": 2, "error": 1}
+    summary = Column(JSON, default=dict)  # blocked/detected/allowed/error counts
+    platform = Column(String, default="")
+    os_version = Column(Text, default="")
+    agent_name = Column(String, default="")
+    agent_version = Column(String, default="")
+    sensor_logs = Column(JSON, default=list)
+    debug_logs = Column(JSON, default=list)
+    performance = Column(JSON, default=dict)
+    uec_match_status = Column(String, default="not_evaluated")
+    uec_device_id = Column(String, nullable=True)
 
     playbook = relationship("Playbook", back_populates="runs")
     results = relationship("TestResult", back_populates="run")

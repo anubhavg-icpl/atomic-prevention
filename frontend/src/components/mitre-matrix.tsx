@@ -17,6 +17,11 @@ const FILL = {
   idle: "bg-muted border-border",
 };
 
+const fillFor = (s: { tone: keyof typeof FILL; token?: "detected" }) =>
+  s.token === "detected"
+    ? "bg-status-info/25 border-status-info/50"
+    : FILL[s.tone];
+
 export default function MitreMatrix({ techniques, verdicts }: { techniques: Technique[]; verdicts: Record<string, string> }) {
   const columns = useMemo(
     () => TACTICS.map((t) => ({ ...t, items: techniques.filter((x) => x.tactics.includes(t.id)) })),
@@ -28,11 +33,11 @@ export default function MitreMatrix({ techniques, verdicts }: { techniques: Tech
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id="matrix-h" className="text-lg font-semibold">ATT&amp;CK coverage</h2>
         <ul className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-          {(["blocked", "allowed", "untested"] as const).map((v) => {
+          {(["blocked", "detected", "allowed", "untested"] as const).map((v) => {
             const s = canonicalVerdict(v);
             return (
               <li key={v} className="flex items-center gap-1.5">
-                <span className={`size-3 rounded-sm border ${FILL[s.tone]}`} aria-hidden />
+                <span className={`size-3 rounded-sm border ${fillFor(s)}`} aria-hidden />
                 {s.label}
               </li>
             );
@@ -55,7 +60,7 @@ export default function MitreMatrix({ techniques, verdicts }: { techniques: Tech
                     href={`/techniques?search=${encodeURIComponent(t.id)}`}
                     title={`${t.id} ${t.name}: ${s.label}`}
                     aria-label={`${t.id} ${t.name}, ${s.label}`}
-                    className={`block truncate rounded-sm border px-1.5 py-1 font-mono text-xs hover:brightness-95 ${FILL[s.tone]}`}
+                    className={`block truncate rounded-sm border px-1.5 py-1 font-mono text-xs hover:brightness-95 ${fillFor(s)}`}
                   >
                     {t.id}
                   </Link>

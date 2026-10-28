@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.core.config import settings
 from backend.app.db.database import async_session, init_db
-from backend.app.api.routes import techniques, playbooks, adversaries, results, sources
+from backend.app.api.routes import techniques, playbooks, adversaries, results, sources, integrations, qa
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +342,8 @@ app.include_router(playbooks.router, prefix="/api/playbooks", tags=["playbooks"]
 app.include_router(adversaries.router, prefix="/api/adversaries", tags=["adversaries"])
 app.include_router(results.router, prefix="/api/results", tags=["results"])
 app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
+app.include_router(integrations.router, prefix="/api/integrations", tags=["integrations"])
+app.include_router(qa.router, prefix="/api/qa", tags=["qa"])
 
 
 @app.get("/api/health")

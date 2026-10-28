@@ -14,6 +14,7 @@ import {
   type DashboardStats, type PlaybookSummary, type PreventionStats, type Source, type Technique,
 } from "@/lib/api";
 import { formatDate } from "@/lib/attack";
+import { visibilityScore } from "@/lib/status";
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -69,6 +70,7 @@ export default function DashboardPage() {
 
   const hasRuns = (prevention?.total_runs ?? 0) > 0;
   const score = hasRuns ? Math.round(prevention!.prevention_score) : null;
+  const visibility = hasRuns ? visibilityScore(prevention!) : null;
 
   return (
     <>
@@ -89,17 +91,29 @@ export default function DashboardPage() {
               <WarningCircle size={16} aria-hidden /> Some data did not load. Showing what arrived.
             </p>
           )}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-7">
             <Stat label="Techniques" value={stats.techniques.total_techniques} />
             <Stat label="Prevention tests" value={stats.techniques.total_tests} />
             <Stat label="Data sources" value={stats.sources.length} />
             <Stat label="Adversary groups" value={stats.adversaries.total_groups} />
+            <Stat label="Detected tests" value={prevention?.total_detected ?? 0} />
             <div className="surface flex items-center gap-4 p-4">
               <ScoreRing score={score} />
               <div>
                 <p className="text-label font-medium">Prevention score</p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {hasRuns ? `${prevention!.total_blocked} blocked of ${prevention!.total_blocked + prevention!.total_allowed} tests` : "Run a playbook to see results"}
+                </p>
+              </div>
+            </div>
+            <div className="surface flex items-center gap-4 p-4">
+              <ScoreRing score={visibility} />
+              <div>
+                <p className="text-label font-medium">Visibility score</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {hasRuns
+                    ? `${(prevention!.total_blocked ?? 0) + (prevention!.total_detected ?? 0)} blocked or detected of ${(prevention!.total_blocked ?? 0) + (prevention!.total_detected ?? 0) + prevention!.total_allowed} tests`
+                    : "Run a playbook to see results"}
                 </p>
               </div>
             </div>

@@ -130,7 +130,7 @@ function ResultsInner() {
                         <span className="block text-xs text-muted-foreground">{r.hostname || "Unknown host"} · {formatDate(r.started_at, true)}</span>
                       </span>
                       <span className="text-label tabular-nums text-muted-foreground">
-                        {r.summary.blocked} blocked · {r.summary.allowed} allowed{r.summary.error > 0 ? ` · ${r.summary.error} errors` : ""}
+                        {r.summary.blocked} blocked · {r.summary.detected ?? 0} detected · {r.summary.allowed} allowed{r.summary.error > 0 ? ` · ${r.summary.error} errors` : ""}
                       </span>
                       <CaretRight size={16} className="text-muted-foreground" aria-hidden />
                     </button>

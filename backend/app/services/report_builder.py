@@ -42,6 +42,7 @@ class ReportBuilder:
                     "tactics": tech_info.get("tactics", []),
                     "tests": [],
                     "blocked": 0,
+                    "detected": 0,
                     "allowed": 0,
                     "error": 0,
                 }
@@ -60,11 +61,14 @@ class ReportBuilder:
 
         # Calculate overall score
         total_blocked = sum(t["blocked"] for t in technique_results.values())
+        total_detected = sum(t["detected"] for t in technique_results.values())
         total_allowed = sum(t["allowed"] for t in technique_results.values())
         total_error = sum(t["error"] for t in technique_results.values())
-        total = total_blocked + total_allowed + total_error
-        scored_total = total_blocked + total_allowed
+        total = total_blocked + total_detected + total_allowed + total_error
+        scored_total = total_blocked + total_detected + total_allowed
+        visible_total = total_blocked + total_detected
         prevention_score = (total_blocked / scored_total * 100) if scored_total > 0 else 0
+        detection_score = (visible_total / scored_total * 100) if scored_total > 0 else 0
 
         return {
             "run_id": run.id,
@@ -75,9 +79,12 @@ class ReportBuilder:
             "summary": {
                 "total_tests": total,
                 "blocked": total_blocked,
+                "detected": total_detected,
                 "allowed": total_allowed,
                 "error": total_error,
                 "prevention_score": round(prevention_score, 1),
+                "detection_score": round(detection_score, 1),
+                "visibility_score": round(detection_score, 1),
             },
             "techniques": list(technique_results.values()),
         }
@@ -104,13 +111,24 @@ class ReportBuilder:
             .where(TestResult.verdict == "allowed")
         ) or 0
 
-        scored_results = blocked_count + allowed_count
+        detected_count = await self.db.scalar(
+            select(func.count())
+            .select_from(TestResult)
+            .where(TestResult.verdict == "detected")
+        ) or 0
+
+        scored_results = blocked_count + detected_count + allowed_count
+        visible_results = blocked_count + detected_count
         prevention_rate = (blocked_count / scored_results * 100) if scored_results > 0 else 0
+        detection_rate = (visible_results / scored_results * 100) if scored_results > 0 else 0
 
         return {
             "total_runs": total_runs,
             "total_results": total_results,
             "blocked": blocked_count,
+            "detected": detected_count,
             "allowed": allowed_count,
             "prevention_rate": round(prevention_rate, 1),
+            "detection_rate": round(detection_rate, 1),
+            "visibility_rate": round(detection_rate, 1),
         }

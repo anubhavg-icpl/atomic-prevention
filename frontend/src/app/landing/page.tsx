@@ -13,13 +13,13 @@ const STATS = [
   { label: "ATT&CK techniques", value: "700+" },
   { label: "Adversary groups", value: "170+" },
   { label: "Data sources", value: "11" },
-  { label: "Verdicts per test", value: "2" },
+  { label: "Verdicts per test", value: "3" },
 ];
 
 const FEATURES = [
   { icon: Stack, title: "Many sources, one framework", text: "LOLBAS, LOLDrivers, LOLRMM, Atomic Red Team and more, normalised into one test catalogue." },
   { icon: Target, title: "Mapped to ATT&CK", text: "Every test belongs to a technique and tactic. Build a playbook from the groups you actually face." },
-  { icon: ShieldCheck, title: "Prevention, not detection", text: "Each test answers one question: was it blocked or allowed? You get a prevention score." },
+  { icon: ShieldCheck, title: "Prevention and visibility", text: "Each test reports blocked, detected, or allowed, so prevention and telemetry gaps stay separate." },
   { icon: Lightning, title: "Playbooks you can run", text: "Export JSON, run it with the PowerShell or Python agent, and results flow back to the console." },
   { icon: ChartBar, title: "Coverage you can read", text: "A matrix of tactics and techniques shows exactly where controls hold and where they do not." },
   { icon: GitBranch, title: "Open and extensible", text: "Add a source by writing an ingester. Run it from the container image or build it yourself." },
@@ -29,7 +29,7 @@ const STEPS = [
   { title: "Ingest", text: "Pull LOL project data and the ATT&CK dataset." },
   { title: "Generate", text: "Pick an adversary group and get a mapped playbook." },
   { title: "Execute", text: "Run it on an authorised lab host with an agent." },
-  { title: "Report", text: "Read blocked and allowed verdicts with a score." },
+  { title: "Report", text: "Read verdicts, output evidence, sensor benchmarks, and visibility scores." },
 ];
 
 const SOURCES = [
@@ -125,6 +125,7 @@ export default function LandingPage() {
             <p className="mt-6 text-label font-medium text-muted-foreground">Sample agent output</p>
             <div className="surface mt-2 space-y-1.5 p-4 font-mono text-data">
               <p className="flex flex-wrap items-center gap-3"><StatusDot tone="ok" label="Blocked" /><Mono>T1059.001</Mono>PowerShell execution</p>
+              <p className="flex flex-wrap items-center gap-3"><StatusDot tone="degraded" token="detected" label="Detected" /><Mono>T1059.004</Mono>Unix shell telemetry</p>
               <p className="flex flex-wrap items-center gap-3"><StatusDot tone="error" label="Allowed" /><Mono>T1218.011</Mono>Rundll32 proxy execution</p>
               <p className="flex flex-wrap items-center gap-3"><StatusDot tone="ok" label="Blocked" /><Mono>T1218.005</Mono>Mshta script execution</p>
             </div>

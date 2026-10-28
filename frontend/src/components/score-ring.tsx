@@ -9,11 +9,24 @@ const STROKE: Record<Tone, string> = {
   idle: "stroke-status-idle",
 };
 
-export default function ScoreRing({ score, size = 72 }: { score: number | null; size?: number }) {
+export default function ScoreRing({
+  score,
+  size = 72,
+  label = "Prevention score",
+}: {
+  score: number | null;
+  size?: number;
+  label?: string;
+}) {
   const r = 15.9155; // circumference = 100, so dasharray is the percentage directly
   const tone = scoreTone(score);
   return (
-    <div className="relative shrink-0" style={{ width: size, height: size }} role="img" aria-label={score === null ? "No score yet" : `Prevention score ${score} percent`}>
+    <div
+      className="relative shrink-0"
+      style={{ width: size, height: size }}
+      role="img"
+      aria-label={score === null ? `${label}: no data` : `${label} ${score} percent`}
+    >
       <svg viewBox="0 0 36 36" className="size-full -rotate-90" fill="none" strokeWidth="3.5">
         <circle cx="18" cy="18" r={r} className="stroke-muted" />
         {score !== null && <circle cx="18" cy="18" r={r} strokeLinecap="round" strokeDasharray={`${score} 100`} className={STROKE[tone]} />}

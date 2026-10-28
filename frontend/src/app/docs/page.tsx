@@ -227,18 +227,18 @@ const API_SECTIONS: Section[] = [
       "test_id": "test-1",
       "verdict": "blocked",
       "exit_code": 1,
-      "duration_ms": 1250,
+      "execution_time_ms": 1250,
+      "started_at": "2026-10-27T12:00:00Z",
+      "completed_at": "2026-10-27T12:00:01Z",
       "stdout": "...",
-      "stderr": "Access denied"
+      "stderr": "Access denied",
+      "agent_logs": [...]
     }
   ]
 }`,
         example_response: `{
   "run_id": "run-a1b2c3d4-...",
-  "tests_submitted": 42,
-  "blocked": 38,
-  "allowed": 4,
-  "prevention_score": 90.5
+  "summary": { "blocked": 37, "detected": 1, "allowed": 4, "error": 0 }
 }`,
       },
       {
@@ -247,10 +247,7 @@ const API_SECTIONS: Section[] = [
         description: "Upload a results JSON file (multipart form)",
         example_response: `{
   "run_id": "run-a1b2c3d4-...",
-  "tests_submitted": 42,
-  "blocked": 38,
-  "allowed": 4,
-  "prevention_score": 90.5
+  "summary": { "blocked": 37, "detected": 1, "allowed": 4, "error": 0 }
 }`,
         notes: "Accepts a file upload (results JSON exported by the agent).",
       },
@@ -268,11 +265,12 @@ const API_SECTIONS: Section[] = [
   "platform": "windows",
   "submitted_at": "2026-03-28T20:30:00Z",
   "summary": {
-    "total": 42,
-    "blocked": 38,
+    "blocked": 37,
+    "detected": 1,
     "allowed": 4,
     "error": 0,
-    "prevention_score": 90.5
+    "prevention_score": 88.1,
+    "visibility_score": 90.5
   },
   "results": [...]
 }`,
@@ -319,6 +317,56 @@ const API_SECTIONS: Section[] = [
   "techniques_updated": 56
 }`,
         notes: "Available sources: lolbas, atomic-red-team, loldrivers, lolrmm, loobins, lolapi, lottunnels, persistence-info, gtfobins, loas, sysinternals",
+      },
+    ],
+  },
+  {
+    title: "QA automation",
+    description: "UEC correlation, Claude analysis, and GitLab issue tracking",
+    endpoints: [
+      {
+        method: "GET",
+        path: "/api/integrations/status",
+        description: "Show whether optional integrations are enabled and configured",
+        example_response: `{
+  "claude": { "enabled": true, "configured": true, "model": "claude-sonnet-4-5" },
+  "gitlab": { "enabled": true, "configured": true },
+  "uec": { "enabled": true, "configured": true, "correlation_enabled": true }
+}`,
+      },
+      {
+        method: "GET",
+        path: "/api/integrations/gitlab/projects",
+        description: "Search accessible GitLab projects",
+        params: [
+          { name: "search", type: "string", required: true, description: "Project name or path fragment" },
+        ],
+        example_response: `{ "projects": [{ "id": "532", "path_with_namespace": "infopercept/xdr/uec/uec" }] }`,
+      },
+      {
+        method: "POST",
+        path: "/api/qa/runs/{run_id}/analyze",
+        description: "Correlate UEC evidence and create an optional Claude or deterministic QA analysis",
+        params: [
+          { name: "run_id", type: "string", required: true, description: "Playbook run identifier" },
+        ],
+        example_response: `{
+  "provider": "claude",
+  "model": "claude-sonnet-4-5",
+  "result": { "summary": "...", "findings": [...], "issue": {...} }
+}`,
+      },
+      {
+        method: "POST",
+        path: "/api/qa/analyses/{analysis_id}/issue",
+        description: "Create or link an idempotent consolidated GitLab issue",
+        body: `{
+  "project_id": "532",
+  "title": "Endpoint control QA findings",
+  "labels": ["qa", "endpoint-security"]
+}`,
+        example_response: `{ "web_url": "https://gitlab.invinsense.dev/...", "created": "created" }`,
+        notes: "The issue description contains a deterministic run marker. Retries link to the existing issue instead of creating another one.",
       },
     ],
   },

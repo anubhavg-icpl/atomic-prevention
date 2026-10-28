@@ -92,6 +92,7 @@ function Invoke-TestProcess {
     }
 
     return @{
+        StartedAt = (Get-Date).ToUniversalTime().ToString('o')
         ProcessStarted = $started
         ExitCode = $exitCode
         TimedOut = $timedOut

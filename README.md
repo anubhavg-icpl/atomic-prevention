@@ -16,7 +16,7 @@ It aggregates multiple LOL projects ([LOLBAS](https://lolbas-project.github.io/)
 2. **Map** everything to MITRE ATT&CK techniques and 170+ adversary groups
 3. **Generate** a playbook targeting a specific adversary group (e.g., "What would Volt Typhoon use?")
 4. **Execute** the playbook on a target system using the PowerShell agent
-5. **Report** which techniques were **blocked** vs **allowed** by your controls
+5. **Report** which techniques were **blocked**, **detected**, or **allowed** by your controls
 
 ## Quick Start
 
@@ -214,6 +214,16 @@ The web console is served by the backend at `http://localhost:3000` (a static Ne
 | Results | Per-playbook runs, per-test verdicts, and upload of an agent results file |
 | API Docs | Every endpoint with a live "Try it" for read-only calls |
 
+### AI QA automation and issue tracking
+
+The console includes a QA automation page for the complete validation loop. Agents
+return command output, phase logs, bounded UEC sensor logs, and sensor CPU/memory
+benchmarks. Atomic Prevention correlates completed executions with authoritative
+UEC threat findings, distinguishes detection-only outcomes from actual prevention,
+and shows every result with its evidence. Claude Sonnet can summarize the run and
+draft issues; GitLab issue creation is idempotent and can run automatically after
+analysis. See [AI QA automation and issue tracking](docs/qa-automation.md).
+
 Design follows the Invinsense module UI guide: Geist type, tokenised colours with one red-team accent, Phosphor Bold icons, status always shown as a dot plus a word, and full light and dark themes. Colours live as tokens in `frontend/src/app/globals.css`; components never hard-code a colour.
 
 ### Screenshots
@@ -289,6 +299,11 @@ npm run build       # static export to frontend/out
 | `POST` | `/api/sources/{id}/sync` | Sync a data source (see 11 sources above) |
 | `GET` | `/api/agent/download` | Download the full agent bundle (PowerShell + Python) as a zip |
 | `GET` | `/api/agent/download-python` | Download just the Python agent (single file, zero deps) |
+| `GET` | `/api/integrations/status` | Safe integration configuration state |
+| `GET` | `/api/integrations/gitlab/projects` | Search accessible GitLab projects |
+| `POST` | `/api/qa/runs/{id}/analyze` | Correlate evidence and run optional Claude analysis |
+| `POST` | `/api/qa/analyses/{id}/issue` | Create or link one consolidated GitLab issue |
+| `POST` | `/api/qa/analyses/{id}/issues` | Create or link GitLab issues, optionally one per finding |
 
 ## Adding New Data Sources
 

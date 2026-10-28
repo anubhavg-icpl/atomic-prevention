@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpenText, ChartBar, FileCode, Moon, SquaresFour, Sun, Target, UsersThree, DownloadSimple, CaretLeft, CaretRight, type IconProps,
+  BookOpenText, ChartBar, ClipboardText, FileCode, Moon, SquaresFour, Sun, Target, UsersThree, DownloadSimple, CaretLeft, CaretRight, type IconProps,
 } from "@phosphor-icons/react";
 import type { ComponentType } from "react";
 import AtomLogo from "./atom-logo";
@@ -18,6 +18,7 @@ const NAV: { href: string; label: string; icon: ComponentType<IconProps> }[] = [
   { href: "/techniques", label: "Techniques", icon: Target },
   { href: "/adversaries", label: "Adversaries", icon: UsersThree },
   { href: "/playbooks", label: "Playbooks", icon: BookOpenText },
+  { href: "/qa", label: "Quality automation", icon: ClipboardText },
   { href: "/results", label: "Results", icon: ChartBar },
   { href: "/docs", label: "API Docs", icon: FileCode },
 ];
